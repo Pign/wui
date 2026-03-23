@@ -1,0 +1,5 @@
+-cp src
+-cp ../../src
+--macro wui.macros.WinUIGenerator.register()
+-main HelloWorld
+-cpp build/cpp

@@ -1,0 +1,8 @@
+{
+    "appName": "HelloWorld",
+    "packageName": "com.wui.helloworld",
+    "displayName": "Hello World",
+    "windowsAppSdkVersion": "1.5.*",
+    "targetFramework": "net8.0-windows10.0.22621.0",
+    "architecture": "x64"
+}

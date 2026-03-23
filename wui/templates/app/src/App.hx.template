@@ -1,0 +1,23 @@
+import wui.App;
+import wui.View;
+import wui.ui.VStack;
+import wui.ui.Text;
+import wui.ui.Button;
+import wui.ui.Spacer;
+import wui.modifiers.ViewModifier;
+
+class {{APP_NAME}} extends wui.App {
+    override function appName():String {
+        return "{{APP_NAME}}";
+    }
+
+    override function body():View {
+        return new VStack([
+            new Spacer(),
+            new Text("Hello from Haxe!")
+                .font(TitleLarge)
+                .padding(),
+            new Spacer()
+        ]);
+    }
+}

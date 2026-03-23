@@ -1,0 +1,14 @@
+{
+    "name": "wui",
+    "version": "0.1.0",
+    "description": "Write native WinUI 3 applications in Haxe",
+    "url": "https://github.com/user/wui",
+    "license": "MIT",
+    "tags": ["ui", "winui", "windows", "native", "gui"],
+    "classPath": "src",
+    "main": "tools.cli.CLI",
+    "dependencies": {
+        "hxcpp": ""
+    },
+    "contributors": []
+}

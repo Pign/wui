@@ -1,0 +1,16 @@
+# Build outputs
+build/
+bin/
+
+# NuGet packages (restored on build)
+packages/
+
+# IDE
+.vs/
+*.user
+*.suo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
