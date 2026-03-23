@@ -378,6 +378,10 @@ class WinUIGenerator {
                     var placeholder = extractStringOrExpr(args[0]);
                     if (placeholder != null) props.set("placeholder", placeholder);
                 }
+                if (args.length > 1) {
+                    var stateRef = deepExtractStateRef(args[1]);
+                    if (stateRef != null) props.set("boundState", stateRef);
+                }
                 { viewType: "TextBox", children: [], modifiers: [], properties: props };
 
             case "wui.ui.ToggleSwitch":
@@ -385,6 +389,10 @@ class WinUIGenerator {
                 if (args.length > 0) {
                     var label = extractStringOrExpr(args[0]);
                     if (label != null) props.set("label", label);
+                }
+                if (args.length > 1) {
+                    var stateRef = deepExtractStateRef(args[1]);
+                    if (stateRef != null) props.set("boundState", stateRef);
                 }
                 { viewType: "ToggleSwitch", children: [], modifiers: [], properties: props };
 
@@ -394,12 +402,22 @@ class WinUIGenerator {
                     var label = extractStringOrExpr(args[0]);
                     if (label != null) props.set("label", label);
                 }
+                if (args.length > 1) {
+                    var stateRef = deepExtractStateRef(args[1]);
+                    if (stateRef != null) props.set("boundState", stateRef);
+                }
                 { viewType: "CheckBox", children: [], modifiers: [], properties: props };
 
             case "wui.ui.Slider":
                 var props:Map<String, Dynamic> = new Map();
                 if (args.length > 0) props.set("min", extractFloatValue(args[0]));
                 if (args.length > 1) props.set("max", extractFloatValue(args[1]));
+                // args[2] = binding, args[3] = step
+                if (args.length > 2) {
+                    var stateRef = deepExtractStateRef(args[2]);
+                    if (stateRef != null) props.set("boundState", stateRef);
+                }
+                if (args.length > 3) props.set("step", extractFloatValue(args[3]));
                 { viewType: "Slider", children: [], modifiers: [], properties: props };
 
             case "wui.ui.Image":
@@ -632,13 +650,19 @@ class WinUIGenerator {
         if (expr == null) return null;
         switch (expr.expr) {
             case TField(obj, fa):
-                // state.value access — check if obj is a state field
                 var fieldName = switch (fa) {
                     case FInstance(_, _, cf): cf.get().name;
                     case FDynamic(s): s;
                     default: null;
                 };
+                // state.value access
                 if (fieldName == "value") return extractStateFieldRef(obj);
+                // Direct field reference (this.count)
+                if (fieldName != null) {
+                    for (sf in UIBuilder.stateFields) {
+                        if (fieldName == sf.name) return sf.name;
+                    }
+                }
                 return null;
 
             case TLocal(v):
@@ -792,10 +816,11 @@ class WinUIGenerator {
                     var stateRef = deepExtractStateRef(e2);
                     if (prefix != null && prefix != "..." && stateRef != null) {
                         var escaped = UIBuilder.escapeWideString(prefix);
+                        var valueExpr = stateToWstring(stateRef);
                         return {
                             text: prefix + "0",
                             boundState: stateRef,
-                            format: 'CTRL.Text(winrt::hstring(L"$escaped" + std::to_wstring(s_$stateRef)));'
+                            format: 'CTRL.Text(winrt::hstring(L"$escaped" + $valueExpr));'
                         };
                     }
                     // count + "suffix"
@@ -803,10 +828,11 @@ class WinUIGenerator {
                     var suffix = extractStringOrExpr(e2);
                     if (stateRef1 != null && suffix != null && suffix != "...") {
                         var escaped = UIBuilder.escapeWideString(suffix);
+                        var valueExpr = stateToWstring(stateRef1);
                         return {
                             text: "0" + suffix,
                             boundState: stateRef1,
-                            format: 'CTRL.Text(winrt::hstring(std::to_wstring(s_$stateRef1) + L"$escaped"));'
+                            format: 'CTRL.Text(winrt::hstring($valueExpr + L"$escaped"));'
                         };
                     }
                 }
@@ -822,6 +848,18 @@ class WinUIGenerator {
                 }
         }
         return null;
+    }
+
+    /** Return C++ expression to convert a state variable to std::wstring. */
+    static function stateToWstring(stateName:String):String {
+        for (sf in UIBuilder.stateFields) {
+            if (sf.name == stateName) {
+                if (sf.type == "std::wstring") return 's_$stateName';
+                if (sf.type == "bool") return '(s_$stateName ? std::wstring(L"true") : std::wstring(L"false"))';
+                return 'std::to_wstring(s_$stateName)';
+            }
+        }
+        return 'std::to_wstring(s_$stateName)';
     }
 
     static function defaultNode():ViewNode {

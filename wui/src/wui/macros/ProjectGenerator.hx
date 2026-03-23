@@ -72,7 +72,7 @@ class ProjectGenerator {
     <CppWinRTOptimized>true</CppWinRTOptimized>
     <CppWinRTRootNamespaceAutoMerge>true</CppWinRTRootNamespaceAutoMerge>
     <CppWinRTGenerateWindowsMetadata>true</CppWinRTGenerateWindowsMetadata>
-    <EnableXbfGeneration>false</EnableXbfGeneration>
+    <EnableXbfGeneration>true</EnableXbfGeneration>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\\Microsoft.Cpp.Default.props" />
@@ -152,10 +152,8 @@ class ProjectGenerator {
   <Import Project="$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.targets" Condition="Exists(\'$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.targets\')" />
   <Import Project="$packagesDir\\Microsoft.Windows.SDK.BuildTools.10.0.22621.756\\build\\native\\Microsoft.Windows.SDK.BuildTools.targets" Condition="Exists(\'$packagesDir\\Microsoft.Windows.SDK.BuildTools.10.0.22621.756\\build\\native\\Microsoft.Windows.SDK.BuildTools.targets\')" />
 
-  <!-- Override: skip XBF copy (App.xaml is resource-loading only, no compiled XAML needed) -->
+  <!-- Override targets that fail due to missing XBF (XAML compiler not available) -->
   <Target Name="CopyGeneratedXaml" />
-
-  <!-- Override MRT targets that fail looking for App.xbf -->
   <Target Name="_GenerateProjectPriConfigurationFiles" />
   <Target Name="_GenerateProjectPriFileCore" />
 

@@ -310,6 +310,26 @@ $subscriptionLines
             lines.push('$varName.PlaceholderText(L"$escaped");');
         }
 
+        // Two-way binding to state
+        var boundState = node.properties.get("boundState");
+        if (boundState != null) {
+            var stateName = Std.string(boundState);
+            // Set initial value
+            lines.push('$varName.Text(winrt::hstring(s_$stateName));');
+            // TextBox → state (on text change)
+            lines.push('$varName.TextChanged([](winrt::Windows::Foundation::IInspectable const& sender, winrt_controls::TextChangedEventArgs const&) {');
+            lines.push('    auto h = sender.as<winrt_controls::TextBox>().Text();');
+            lines.push('    s_$stateName = std::wstring(h.c_str(), h.size());');
+            lines.push('    notify_$stateName();');
+            lines.push('});');
+            // State → TextBox
+            stateBindings.push({
+                stateName: stateName,
+                controlVar: varName,
+                format: 'if ($varName.Text() != winrt::hstring(s_$stateName)) $varName.Text(winrt::hstring(s_$stateName));'
+            });
+        }
+
         applyModifiers(varName, "TextBox", node.modifiers, lines);
         return varName;
     }
@@ -322,6 +342,22 @@ $subscriptionLines
         if (label != null) {
             var escaped = escapeWideString(Std.string(label));
             lines.push('$varName.Header(winrt::box_value(L"$escaped"));');
+        }
+
+        // Two-way binding to state
+        var boundState = node.properties.get("boundState");
+        if (boundState != null) {
+            var stateName = Std.string(boundState);
+            lines.push('$varName.IsOn(s_$stateName);');
+            lines.push('$varName.Toggled([](winrt::Windows::Foundation::IInspectable const& sender, winrt_xaml::RoutedEventArgs const&) {');
+            lines.push('    s_$stateName = sender.as<winrt_controls::ToggleSwitch>().IsOn();');
+            lines.push('    notify_$stateName();');
+            lines.push('});');
+            stateBindings.push({
+                stateName: stateName,
+                controlVar: varName,
+                format: '$varName.IsOn(s_$stateName);'
+            });
         }
 
         applyModifiers(varName, "ToggleSwitch", node.modifiers, lines);
@@ -339,6 +375,22 @@ $subscriptionLines
 
         var step = node.properties.get("step");
         if (step != null) lines.push('$varName.StepFrequency($step);');
+
+        // Two-way binding to state
+        var boundState = node.properties.get("boundState");
+        if (boundState != null) {
+            var stateName = Std.string(boundState);
+            lines.push('$varName.Value(static_cast<double>(s_$stateName));');
+            lines.push('$varName.ValueChanged([](winrt::Windows::Foundation::IInspectable const&, winrt_controls::Primitives::RangeBaseValueChangedEventArgs const& e) {');
+            lines.push('    s_$stateName = static_cast<int>(e.NewValue());');
+            lines.push('    notify_$stateName();');
+            lines.push('});');
+            stateBindings.push({
+                stateName: stateName,
+                controlVar: varName,
+                format: '$varName.Value(static_cast<double>(s_$stateName));'
+            });
+        }
 
         applyModifiers(varName, "Slider", node.modifiers, lines);
         return varName;
@@ -383,6 +435,24 @@ $subscriptionLines
         if (label != null) {
             var escaped = escapeWideString(Std.string(label));
             lines.push('$varName.Content(winrt::box_value(L"$escaped"));');
+        }
+
+        // Two-way binding to state
+        var boundState = node.properties.get("boundState");
+        if (boundState != null) {
+            var stateName = Std.string(boundState);
+            lines.push('$varName.IsChecked(s_$stateName);');
+            lines.push('$varName.Checked([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
+            lines.push('    s_$stateName = true; notify_$stateName();');
+            lines.push('});');
+            lines.push('$varName.Unchecked([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
+            lines.push('    s_$stateName = false; notify_$stateName();');
+            lines.push('});');
+            stateBindings.push({
+                stateName: stateName,
+                controlVar: varName,
+                format: '$varName.IsChecked(s_$stateName);'
+            });
         }
 
         applyModifiers(varName, "CheckBox", node.modifiers, lines);
