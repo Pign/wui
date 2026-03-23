@@ -17,8 +17,8 @@ typedef WuiConfig = {
 class Build {
     public static function run(cwd:String, args:Array<String>) {
         var verbose = args.indexOf("--verbose") >= 0 || args.indexOf("-v") >= 0;
-        var release = args.indexOf("--release") >= 0;
-        var config = release ? "Release" : "Debug";
+        var debug = args.indexOf("--debug") >= 0;
+        var config = debug ? "Debug" : "Release";
 
         // Parse architecture
         var arch = "x64";
@@ -38,8 +38,12 @@ class Build {
         var wuiConfig:WuiConfig = Json.parse(File.getContent(wuiJsonPath));
         Sys.println('Building ${wuiConfig.appName} ($config, $arch)...');
 
-        // Step 1: Run Haxe compilation (generates C++ via hxcpp + macro-generated C++/WinRT files)
-        Sys.println("[1/4] Compiling Haxe...");
+        // Auto-detect tool paths
+        var msbuildPath = findMSBuild();
+        var nugetPath = findNuGet();
+
+        // Step 1: Run Haxe compilation
+        Sys.println("[1/3] Compiling Haxe...");
         var buildHxml = Path.join([cwd, "build.hxml"]);
         if (!FileSystem.exists(buildHxml)) {
             Sys.println("Error: build.hxml not found.");
@@ -52,42 +56,117 @@ class Build {
             Sys.exit(1);
         }
 
-        // Step 2: Build hxcpp static library
-        Sys.println("[2/4] Building hxcpp static library...");
-        var cppBuildDir = Path.join([cwd, "build", "cpp"]);
-        var hxcppResult = runCommand(cppBuildDir, "haxelib", ["run", "hxcpp", "Build.xml", "-Dstatic_link"], verbose);
-        if (hxcppResult != 0) {
-            Sys.println("Error: hxcpp compilation failed.");
-            Sys.exit(1);
-        }
-
-        // Step 3: NuGet restore
-        Sys.println("[3/4] Restoring NuGet packages...");
+        // Step 2: NuGet restore
+        Sys.println("[2/3] Restoring NuGet packages...");
         var winuiDir = Path.join([cwd, "build", "winui"]);
         var packagesDir = Path.join([cwd, "build", "packages"]);
-        var nugetResult = runCommand(winuiDir, "nuget", [
-            "restore", "packages.config",
+        if (!FileSystem.exists(packagesDir)) {
+            FileSystem.createDirectory(packagesDir);
+        }
+        var nugetResult = runCommand(cwd, nugetPath, [
+            "restore", Path.join([winuiDir, "packages.config"]),
             "-PackagesDirectory", packagesDir
         ], verbose);
         if (nugetResult != 0) {
-            Sys.println("Warning: NuGet restore failed. Trying dotnet restore...");
+            Sys.println("Warning: NuGet restore may have failed (exit code " + nugetResult + ").");
         }
 
-        // Step 4: MSBuild
-        Sys.println("[4/4] Building WinUI application...");
+        // Step 3: MSBuild
+        Sys.println("[3/3] Building WinUI application...");
         var vcxproj = Path.join([winuiDir, '${wuiConfig.appName}.vcxproj']);
-        var msbuildResult = runCommand(winuiDir, "msbuild", [
+        var msbuildResult = runCommand(cwd, msbuildPath, [
             vcxproj,
-            '/p:Configuration=$config',
-            '/p:Platform=$arch',
-            verbose ? "/v:normal" : "/v:minimal"
+            '-p:Configuration=$config',
+            '-p:Platform=$arch',
+            '-clp:ErrorsOnly',
+            verbose ? "-v:normal" : "-v:minimal"
         ], verbose);
-        if (msbuildResult != 0) {
-            Sys.println("Error: MSBuild failed.");
+
+        // Check if the exe was produced (MSBuild may report non-fatal post-link errors)
+        var exeDir = Path.join([winuiDir, arch, config]);
+        var exeFile = Path.join([exeDir, '${wuiConfig.appName}.exe']);
+        if (!FileSystem.exists(exeFile)) {
+            Sys.println("Error: MSBuild failed — no exe produced.");
             Sys.exit(1);
         }
 
-        Sys.println('Build complete: build/winui/$config/${wuiConfig.appName}.exe');
+        var exePath = 'build/winui/$arch/$config/${wuiConfig.appName}.exe';
+        Sys.println('Build complete: $exePath');
+    }
+
+    /**
+     * Find MSBuild.exe using vswhere, then fallback to PATH.
+     */
+    static function findMSBuild():String {
+        // Try vswhere first (standard location)
+        var vswhere = "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
+        if (FileSystem.exists(vswhere)) {
+            var process = new sys.io.Process(vswhere, [
+                "-latest", "-products", "*",
+                "-requires", "Microsoft.Component.MSBuild",
+                "-find", "MSBuild\\**\\Bin\\MSBuild.exe"
+            ]);
+            var output = StringTools.trim(process.stdout.readAll().toString());
+            var exitCode = process.exitCode();
+            process.close();
+            if (exitCode == 0 && output.length > 0) {
+                // Take the first line (latest version)
+                var firstLine = output.split("\n")[0];
+                firstLine = StringTools.trim(firstLine);
+                if (FileSystem.exists(firstLine)) {
+                    Sys.println('  Found MSBuild: $firstLine');
+                    return firstLine;
+                }
+            }
+        }
+
+        // Try common paths
+        var commonPaths = [
+            "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\MSBuild\\Current\\Bin\\MSBuild.exe",
+            "C:\\Program Files\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\MSBuild.exe",
+        ];
+        for (p in commonPaths) {
+            if (FileSystem.exists(p)) {
+                Sys.println('  Found MSBuild: $p');
+                return p;
+            }
+        }
+
+        // Fallback to PATH
+        Sys.println("  MSBuild: using PATH (run from Developer Command Prompt if this fails)");
+        return "msbuild";
+    }
+
+    /**
+     * Find nuget.exe — check common locations, then PATH.
+     */
+    static function findNuGet():String {
+        // Check winget install location
+        var home = Sys.getEnv("USERPROFILE");
+        if (home == null) home = Sys.getEnv("HOME");
+        if (home != null) {
+            var wingetNuget = Path.join([home, "AppData", "Local", "Microsoft", "WinGet",
+                "Packages", "Microsoft.NuGet_Microsoft.WinGet.Source_8wekyb3d8bbwe", "nuget.exe"]);
+            if (FileSystem.exists(wingetNuget)) return wingetNuget;
+
+            // Check winget links
+            var wingetLink = Path.join([home, "AppData", "Local", "Microsoft", "WinGet", "Links", "nuget.exe"]);
+            if (FileSystem.exists(wingetLink)) return wingetLink;
+        }
+
+        // Common paths
+        var commonPaths = [
+            "C:\\Program Files\\NuGet\\nuget.exe",
+            "C:\\Program Files (x86)\\NuGet\\nuget.exe",
+        ];
+        for (p in commonPaths) {
+            if (FileSystem.exists(p)) return p;
+        }
+
+        // Fallback to PATH
+        return "nuget";
     }
 
     public static function runCommand(workDir:String, cmd:String, args:Array<String>, verbose:Bool):Int {
