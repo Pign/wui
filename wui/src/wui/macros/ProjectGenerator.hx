@@ -71,8 +71,7 @@ class ProjectGenerator {
     <AppxPackage>false</AppxPackage>
     <CppWinRTOptimized>true</CppWinRTOptimized>
     <CppWinRTRootNamespaceAutoMerge>true</CppWinRTRootNamespaceAutoMerge>
-    <CppWinRTGenerateWindowsMetadata>true</CppWinRTGenerateWindowsMetadata>
-    <EnableXbfGeneration>true</EnableXbfGeneration>
+    <CppWinRTGenerateWindowsMetadata>false</CppWinRTGenerateWindowsMetadata>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\\Microsoft.Cpp.Default.props" />
@@ -132,16 +131,6 @@ class ProjectGenerator {
   </ItemGroup>
 
   <ItemGroup>
-    <Midl Include="App.idl" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ApplicationDefinition Include="App.xaml">
-      <SubType>Designer</SubType>
-    </ApplicationDefinition>
-  </ItemGroup>
-
-  <ItemGroup>
     <Manifest Include="app.manifest" />
   </ItemGroup>
 
@@ -152,10 +141,6 @@ class ProjectGenerator {
   <Import Project="$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.targets" Condition="Exists(\'$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.targets\')" />
   <Import Project="$packagesDir\\Microsoft.Windows.SDK.BuildTools.10.0.22621.756\\build\\native\\Microsoft.Windows.SDK.BuildTools.targets" Condition="Exists(\'$packagesDir\\Microsoft.Windows.SDK.BuildTools.10.0.22621.756\\build\\native\\Microsoft.Windows.SDK.BuildTools.targets\')" />
 
-  <!-- Override targets that fail due to missing XBF (XAML compiler not available) -->
-  <Target Name="CopyGeneratedXaml" />
-  <Target Name="_GenerateProjectPriConfigurationFiles" />
-  <Target Name="_GenerateProjectPriFileCore" />
 
 </Project>
 ';
@@ -193,8 +178,11 @@ class ProjectGenerator {
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.Navigation.h>
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
+#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Windows.Graphics.h>
+#include <winrt/Windows.UI.Xaml.Interop.h>
 
 // Standard library
 #include <string>

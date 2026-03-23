@@ -21,14 +21,15 @@ class BridgeGenerator {
 
         generateAppHeader(appName, outputDir);
         generateAppSource(appName, outputDir, windowWidth, windowHeight);
-        generateAppXaml(outputDir);
-        generateAppIdl(appName, outputDir);
         generateRuntime(outputDir);
     }
 
     static function generateAppHeader(appName:String, outputDir:String):Void {
+        // No XAML, no IDL — pure C++/WinRT Application with IXamlMetadataProvider
         var content = '#pragma once
 #include "pch.h"
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
+#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 
 // Forward declare the UI builder
 namespace MainWindow {
@@ -36,19 +37,27 @@ namespace MainWindow {
         winrt::Microsoft::UI::Xaml::Window const& window);
 }
 
-#include "wui.App.g.h"
+// Application class with IXamlMetadataProvider for programmatic resource loading.
+// No XAML, no IDL, no XBF needed.
+struct App : winrt::Microsoft::UI::Xaml::ApplicationT<App, winrt::Microsoft::UI::Xaml::Markup::IXamlMetadataProvider>
+{
+    void OnLaunched(winrt::Microsoft::UI::Xaml::LaunchActivatedEventArgs const&);
 
-namespace winrt::wui::implementation
-{
-    struct App : AppT<App>
-    {
-        void OnLaunched(winrt::Microsoft::UI::Xaml::LaunchActivatedEventArgs const&);
-    };
-}
-namespace winrt::wui::factory_implementation
-{
-    struct App : AppT<App, implementation::App> {};
-}
+    // IXamlMetadataProvider — delegates to XamlControlsXamlMetaDataProvider
+    winrt::Microsoft::UI::Xaml::Markup::IXamlType GetXamlType(winrt::Windows::UI::Xaml::Interop::TypeName const& type) {
+        return m_provider.GetXamlType(type);
+    }
+    winrt::Microsoft::UI::Xaml::Markup::IXamlType GetXamlType(winrt::hstring const& fullName) {
+        return m_provider.GetXamlType(fullName);
+    }
+    winrt::com_array<winrt::Microsoft::UI::Xaml::Markup::XmlnsDefinition> GetXmlnsDefinitions() {
+        return m_provider.GetXmlnsDefinitions();
+    }
+
+private:
+    winrt::Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider m_provider;
+    winrt::Microsoft::UI::Xaml::Window m_window{ nullptr };
+};
 ';
         ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.h"]), content);
     }
@@ -60,27 +69,28 @@ namespace winrt::wui::factory_implementation
 
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 
-namespace winrt::wui::implementation
+void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
 {
-    void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
-    {
-        auto window = winrt_xaml::Window();
-        window.Title(L"$appName");
+    // Load WinUI control styles (enables TextBox, Slider, ToggleSwitch, etc.)
+    Resources().MergedDictionaries().Append(
+        winrt::Microsoft::UI::Xaml::Controls::XamlControlsResources());
 
-        // Store the dispatcher queue for UI thread marshaling
-        ::wui::runtime::dispatcherQueue = window.DispatcherQueue();
+    m_window = winrt_xaml::Window();
+    m_window.Title(L"$appName");
 
-        // Resize window
-        if (auto appWindow = window.AppWindow()) {
-            appWindow.Resize(winrt::Windows::Graphics::SizeInt32{ $windowWidth, $windowHeight });
-        }
+    // Store the dispatcher queue for UI thread marshaling
+    wui::runtime::dispatcherQueue = m_window.DispatcherQueue();
 
-        // Build the UI from Haxe-generated code
-        auto content = MainWindow::BuildUI(window);
-        window.Content(content);
-
-        window.Activate();
+    // Resize window
+    if (auto appWindow = m_window.AppWindow()) {
+        appWindow.Resize(winrt::Windows::Graphics::SizeInt32{ $windowWidth, $windowHeight });
     }
+
+    // Build the UI from Haxe-generated code
+    auto content = MainWindow::BuildUI(m_window);
+    m_window.Content(content);
+
+    m_window.Activate();
 }
 
 // Application entry point
@@ -90,40 +100,13 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 
     winrt_xaml::Application::Start(
         [](auto&&) {
-            ::winrt::make<winrt::wui::implementation::App>();
+            ::winrt::make<App>();
         });
 
     return 0;
 }
 ';
         ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.cpp"]), content);
-    }
-
-    static function generateAppXaml(outputDir:String):Void {
-        var content = '<Application
-    x:Class="wui.App"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:wui">
-    <Application.Resources>
-        <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
-    </Application.Resources>
-</Application>
-';
-        ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.xaml"]), content);
-    }
-
-    static function generateAppIdl(appName:String, outputDir:String):Void {
-        var content = 'namespace wui
-{
-    [default_interface]
-    runtimeclass App : Microsoft.UI.Xaml.Application
-    {
-        App();
-    }
-}
-';
-        ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.idl"]), content);
     }
 
     static function generateRuntime(outputDir:String):Void {
