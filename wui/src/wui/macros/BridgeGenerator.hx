@@ -50,7 +50,7 @@ namespace winrt::wui::factory_implementation
     struct App : AppT<App, implementation::App> {};
 }
 ';
-        File.saveContent(Path.join([outputDir, "App.h"]), content);
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.h"]), content);
     }
 
     static function generateAppSource(appName:String, outputDir:String, windowWidth:Int, windowHeight:Int):Void {
@@ -96,7 +96,7 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     return 0;
 }
 ';
-        File.saveContent(Path.join([outputDir, "App.cpp"]), content);
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.cpp"]), content);
     }
 
     static function generateAppXaml(outputDir:String):Void {
@@ -110,7 +110,7 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     </Application.Resources>
 </Application>
 ';
-        File.saveContent(Path.join([outputDir, "App.xaml"]), content);
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.xaml"]), content);
     }
 
     static function generateAppIdl(appName:String, outputDir:String):Void {
@@ -123,7 +123,7 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     }
 }
 ';
-        File.saveContent(Path.join([outputDir, "App.idl"]), content);
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.idl"]), content);
     }
 
     static function generateRuntime(outputDir:String):Void {
@@ -196,7 +196,7 @@ namespace wui { namespace runtime {
 
 }} // namespace wui::runtime
 ';
-        File.saveContent(Path.join([outputDir, "WuiRuntime.h"]), content);
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiRuntime.h"]), content);
     }
     #end
 }

@@ -65,7 +65,7 @@ namespace MainWindow {
         winrt::Microsoft::UI::Xaml::Window const& window);
 }
 ';
-        File.saveContent(Path.join([outputDir, "MainWindow.h"]), headerContent);
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "MainWindow.h"]), headerContent);
 
         // Build state declarations
         var stateDecls = "";
@@ -132,7 +132,7 @@ $subscriptionLines
 
 } // namespace MainWindow
 ';
-        File.saveContent(Path.join([outputDir, "MainWindow.cpp"]), sourceContent);
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "MainWindow.cpp"]), sourceContent);
     }
 
     /**

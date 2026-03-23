@@ -64,8 +64,11 @@ import wui.ui.VStack;
 import wui.ui.Text;
 import wui.ui.Button;
 import wui.ui.Spacer;
+import wui.modifiers.ViewModifier.FontStyle;
 
 class $name extends wui.App {
+    static function main() {}
+
     override function appName():String {
         return "$name";
     }

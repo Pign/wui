@@ -16,6 +16,21 @@ import haxe.io.Path;
  */
 class ProjectGenerator {
     #if macro
+
+    /** Write file only if content has changed (avoids locking issues with MSBuild). */
+    public static function writeIfChanged(path:String, content:String):Void {
+        if (FileSystem.exists(path)) {
+            var existing = File.getContent(path);
+            if (existing == content) return;
+        }
+        try {
+            File.saveContent(path, content);
+        } catch (e:Dynamic) {
+            // File may be locked by MSBuild — skip if unchanged write fails
+            Sys.println('[wui] Warning: Could not write $path (file may be locked)');
+        }
+    }
+
     public static function generate(appName:String, outputDir:String):Void {
         if (!FileSystem.exists(outputDir)) {
             FileSystem.createDirectory(outputDir);
@@ -146,7 +161,7 @@ class ProjectGenerator {
 
 </Project>
 ';
-        File.saveContent(Path.join([outputDir, '$appName.vcxproj']), content);
+        writeIfChanged(Path.join([outputDir, '$appName.vcxproj']), content);
     }
 
     static function generatePackagesConfig(outputDir:String):Void {
@@ -158,7 +173,7 @@ class ProjectGenerator {
   <package id="Microsoft.Windows.ImplementationLibrary" version="1.0.240122.1" targetFramework="native" />
 </packages>
 ';
-        File.saveContent(Path.join([outputDir, "packages.config"]), content);
+        writeIfChanged(Path.join([outputDir, "packages.config"]), content);
     }
 
     static function generatePch(outputDir:String):Void {
@@ -192,10 +207,10 @@ class ProjectGenerator {
 // WuiRuntime
 #include "WuiRuntime.h"
 ';
-        File.saveContent(Path.join([outputDir, "pch.h"]), header);
+        writeIfChanged(Path.join([outputDir, "pch.h"]), header);
 
         var source = '#include "pch.h"\n';
-        File.saveContent(Path.join([outputDir, "pch.cpp"]), source);
+        writeIfChanged(Path.join([outputDir, "pch.cpp"]), source);
     }
 
     static function generateAppManifest(appName:String, outputDir:String):Void {
@@ -216,7 +231,7 @@ class ProjectGenerator {
   </application>
 </assembly>
 ';
-        File.saveContent(Path.join([outputDir, "app.manifest"]), content);
+        writeIfChanged(Path.join([outputDir, "app.manifest"]), content);
     }
     #end
 }
