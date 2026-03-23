@@ -82,6 +82,9 @@ class WinUIGenerator {
         var windowWidth = getWindowWidth(appType);
         var windowHeight = getWindowHeight(appType);
 
+        // Collect @:state fields
+        UIBuilder.stateFields = collectStateFields(appType);
+
         // Build the view tree from body()
         var viewTree = buildViewTree(appType);
 
@@ -98,6 +101,42 @@ class WinUIGenerator {
         Sys.println("[wui]   Generated MainWindow.h, MainWindow.cpp");
 
         Sys.println('[wui] C++/WinRT project generated at: $winuiDir');
+    }
+
+    /**
+     * Collect @:state fields from the App subclass.
+     */
+    static function collectStateFields(type:Type):Array<{name:String, type:String, initial:String}> {
+        var result:Array<{name:String, type:String, initial:String}> = [];
+        switch (type) {
+            case TInst(ref, _):
+                var cls = ref.get();
+                for (field in cls.fields.get()) {
+                    // Check if the field is a State<T> type
+                    switch (field.type) {
+                        case TInst(tref, params):
+                            var typeName = tref.get().name;
+                            if (typeName == "State" && params.length > 0) {
+                                var cppType = "int"; // default
+                                var initial = "0";
+                                switch (params[0]) {
+                                    case TAbstract(aref, _):
+                                        var aname = aref.get().name;
+                                        if (aname == "Int") { cppType = "int"; initial = "0"; }
+                                        else if (aname == "Float") { cppType = "double"; initial = "0.0"; }
+                                        else if (aname == "Bool") { cppType = "bool"; initial = "false"; }
+                                    case TInst(sref, _):
+                                        if (sref.get().name == "String") { cppType = "std::wstring"; initial = 'L""'; }
+                                    default:
+                                }
+                                result.push({ name: field.name, type: cppType, initial: initial });
+                            }
+                        default:
+                    }
+                }
+            default:
+        }
+        return result;
     }
 
     static function isAppSubclass(cls:ClassType):Bool {

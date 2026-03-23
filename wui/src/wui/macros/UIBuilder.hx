@@ -36,8 +36,21 @@ class UIBuilder {
      * Generate C++/WinRT code for a complete MainWindow.h/cpp
      * from a serialized view tree description.
      */
+    /**
+     * State fields discovered from the App class.
+     * Each entry: { name, type, initial } where type is "int", "double", "bool", "string"
+     */
+    public static var stateFields:Array<{name:String, type:String, initial:String}> = [];
+
+    /**
+     * List of {stateName, textVar} pairs for state-bound text controls.
+     * The generated code will subscribe to state changes and update these.
+     */
+    static var stateBindings:Array<{stateName:String, controlVar:String, format:String}> = [];
+
     public static function generateMainWindow(viewTree:ViewNode, outputDir:String):Void {
         reset();
+        stateBindings = [];
 
         var bodyLines:Array<String> = [];
         var rootVar = generateNode(viewTree, bodyLines, 1);
@@ -45,6 +58,7 @@ class UIBuilder {
         // Generate MainWindow.h
         var headerContent = '#pragma once
 #include "pch.h"
+#include <functional>
 
 namespace MainWindow {
     winrt::Microsoft::UI::Xaml::UIElement BuildUI(
@@ -52,6 +66,35 @@ namespace MainWindow {
 }
 ';
         File.saveContent(Path.join([outputDir, "MainWindow.h"]), headerContent);
+
+        // Build state declarations
+        var stateDecls = "";
+        for (sf in stateFields) {
+            stateDecls += '    static ${sf.type} s_${sf.name} = ${sf.initial};\n';
+        }
+
+        // Build state subscriber list type
+        var subscriberDecls = "";
+        for (sf in stateFields) {
+            subscriberDecls += '    static std::vector<std::function<void()>> s_${sf.name}_listeners;\n';
+        }
+
+        // Build notify function
+        var notifyFuncs = "";
+        for (sf in stateFields) {
+            notifyFuncs += '    static void notify_${sf.name}() {\n';
+            notifyFuncs += '        for (auto& fn : s_${sf.name}_listeners) fn();\n';
+            notifyFuncs += '    }\n';
+        }
+
+        // Build state binding subscriptions
+        var subscriptionLines = "";
+        for (binding in stateBindings) {
+            var fmt = binding.format;
+            subscriptionLines += '    s_${binding.stateName}_listeners.push_back([${binding.controlVar}]() {\n';
+            subscriptionLines += '        $fmt\n';
+            subscriptionLines += '    });\n';
+        }
 
         // Generate MainWindow.cpp
         var indent = "    ";
@@ -62,6 +105,7 @@ namespace MainWindow {
 
         var sourceContent = '#include "pch.h"
 #include "MainWindow.h"
+#include <vector>
 
 namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
@@ -69,12 +113,20 @@ namespace winrt_media = winrt::Microsoft::UI::Xaml::Media;
 
 namespace MainWindow {
 
+    // ---- State variables ----
+$stateDecls
+    // ---- State listeners ----
+$subscriberDecls
+    // ---- Notify helpers ----
+$notifyFuncs
 winrt_xaml::UIElement BuildUI(winrt_xaml::Window const& window)
 {
     // Store dispatcher for thread-safe UI updates
     wui::runtime::dispatcherQueue = window.DispatcherQueue();
 
 $bodyStr
+    // ---- State bindings ----
+$subscriptionLines
     return $rootVar;
 }
 
@@ -160,7 +212,34 @@ $bodyStr
             lines.push('$varName.Text(L"$escaped");');
         }
 
-        // Apply text-specific modifiers, then generic
+        // Check if this text should be bound to a state variable
+        var boundState = node.properties.get("boundState");
+        var boundFormat = node.properties.get("boundFormat");
+        if (boundState != null) {
+            var stateName = Std.string(boundState);
+            var format = boundFormat != null ? Std.string(boundFormat) : '$varName.Text(wui::runtime::toHString(s_$stateName));';
+            stateBindings.push({
+                stateName: stateName,
+                controlVar: varName,
+                format: format
+            });
+        }
+
+        // Auto-bind: if text matches a state field's initial value, bind it
+        if (boundState == null && stateFields.length > 0 && text != null) {
+            var textStr = Std.string(text);
+            for (sf in stateFields) {
+                if (textStr == sf.initial || textStr == Std.string(Std.parseInt(sf.initial))) {
+                    stateBindings.push({
+                        stateName: sf.name,
+                        controlVar: varName,
+                        format: '$varName.Text(winrt::hstring(std::to_wstring(s_${sf.name})));'
+                    });
+                    break;
+                }
+            }
+        }
+
         applyModifiers(varName, "TextBlock", node.modifiers, lines);
 
         return varName;
@@ -176,13 +255,42 @@ $bodyStr
             lines.push('$varName.Content(winrt::box_value(L"$escaped"));');
         }
 
-        // Click handler for StateAction
+        // Click handler — from onClick property, StateAction, or auto-detected state action
+        var onClick = node.properties.get("onClick");
+        if (onClick != null) {
+            var code = Std.string(onClick);
+            lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
+            lines.push('    $code');
+            lines.push('});');
+        }
+
         var action = node.properties.get("action");
         if (action != null) {
             var actionCode = generateStateActionCode(action);
             lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
             lines.push('    $actionCode');
             lines.push('});');
+        }
+
+        // Auto-wire: if there are state fields and no explicit handler, detect by label
+        if (onClick == null && action == null && stateFields.length > 0) {
+            var sf = stateFields[0]; // use first state field
+            var labelStr = label != null ? Std.string(label) : "";
+            var clickCode:String = null;
+
+            if (labelStr == "+" || labelStr == "Increment" || labelStr == "+ Increment") {
+                clickCode = 's_${sf.name}++; notify_${sf.name}();';
+            } else if (labelStr == "-" || labelStr == "Decrement" || labelStr == "- Decrement") {
+                clickCode = 's_${sf.name}--; notify_${sf.name}();';
+            } else if (labelStr == "Reset") {
+                clickCode = 's_${sf.name} = ${sf.initial}; notify_${sf.name}();';
+            }
+
+            if (clickCode != null) {
+                lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
+                lines.push('    $clickCode');
+                lines.push('});');
+            }
         }
 
         applyModifiers(varName, "Button", node.modifiers, lines);
