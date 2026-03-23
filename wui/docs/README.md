@@ -6,11 +6,15 @@ wui is a framework that compiles Haxe code into native WinUI 3 desktop applicati
 
 ## How it works
 
-```
-Haxe source + wui macros
-  ├─► hxcpp → C++ (app logic, state)
-  └─► macros → C++/WinRT + .vcxproj
-              → MSBuild → native .exe
+```mermaid
+flowchart LR
+    A["Haxe DSL"] --> B["wui macros"]
+    B --> C["C++/WinRT"]
+    C --> D["MSBuild"]
+    D --> E["Native .exe"]
+
+    style A fill:#f5a623,color:#000
+    style E fill:#107c10,color:#fff
 ```
 
 You write a declarative UI in Haxe:

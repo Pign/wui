@@ -8,26 +8,33 @@ Haxe's `hxcpp` target compiles to C++. WinUI 3 apps are also C++ (via C++/WinRT)
 
 ## Compilation pipeline
 
+```mermaid
+flowchart TD
+    A["Haxe source (.hx)"] --> B["Haxe compiler + wui macros"]
+    B --> C["hxcpp C++ output<br/>(build/cpp/)"]
+    B --> D["C++/WinRT source<br/>(build/winui/)"]
+    C --> E["hxcpp build → static .lib"]
+    D --> F["NuGet restore"]
+    F --> G["MSBuild"]
+    E --> G
+    G --> H["Native .exe + WinUI DLLs"]
+
+    style A fill:#0078d4,color:#fff
+    style H fill:#107c10,color:#fff
 ```
- Haxe source (.hx)
-       |
-       v
- [Haxe compiler + macros]
-       |
-       +---> hxcpp C++ (build/cpp/)        <-- your logic, state, data
-       |
-       +---> C++/WinRT source (build/winui/)  <-- generated UI code
-       |         App.h / App.cpp
-       |         MainWindow.h / MainWindow.cpp
-       |         WuiRuntime.h
-       |         <AppName>.vcxproj
-       |         packages.config
-       |         pch.h / pch.cpp
-       |         App.xaml / App.idl
-       |         app.manifest
-       |
-       v
- [hxcpp build]  -->  static library (build/cpp/lib<AppName>.lib)
+
+The macros generate several files into `build/winui/`:
+
+```
+ build/winui/
+       App.h / App.cpp          <-- Application entry point
+       MainWindow.h / .cpp      <-- Generated UI code
+       WuiRuntime.h             <-- Runtime helpers
+       <AppName>.vcxproj        <-- MSBuild project
+       packages.config          <-- NuGet dependencies
+       pch.h / pch.cpp          <-- Precompiled headers
+       App.xaml / App.idl       <-- WinRT class registration
+       app.manifest             <-- DPI awareness
        |
        v
  [NuGet restore]  -->  Windows App SDK, CppWinRT, SDK Build Tools

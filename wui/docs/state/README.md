@@ -217,19 +217,21 @@ This is used internally by the modifier system to support both patterns.
 
 ## How state updates flow
 
-```
-1. User interaction (e.g., button click)
-      |
-2. StateAction executes (e.g., Increment)
-      |
-3. State<T>.value setter called
-      |
-4. All subscriber lambdas fire
-      |
-5. Subscribers call C++/WinRT control setters
-   (e.g., textBlock.Text(newValue))
-      |
-6. UI updates instantly (same C++ process, no bridge)
+```mermaid
+sequenceDiagram
+    participant User
+    participant Button as Button (C++/WinRT)
+    participant Action as StateAction
+    participant State as State&lt;T&gt;
+    participant Sub as Subscriber lambda
+    participant UI as TextBlock (C++/WinRT)
+
+    User->>Button: Click
+    Button->>Action: Execute (e.g. Increment)
+    Action->>State: set_value(newValue)
+    State->>Sub: notify(newValue)
+    Sub->>UI: .Text(newValue)
+    Note over UI: UI updates instantly<br/>(same C++ process)
 ```
 
 Because both hxcpp and C++/WinRT compile to native C++, state subscriber lambdas directly call WinUI control APIs. There is no serialization, no JSON, no cross-process communication.
