@@ -218,6 +218,8 @@ $subscriptionLines
         if (boundState != null) {
             var stateName = Std.string(boundState);
             var format = boundFormat != null ? Std.string(boundFormat) : '$varName.Text(wui::runtime::toHString(s_$stateName));';
+            // Replace CTRL placeholder with actual variable name
+            format = StringTools.replace(format, "CTRL", varName);
             stateBindings.push({
                 stateName: stateName,
                 controlVar: varName,
@@ -564,7 +566,7 @@ $subscriptionLines
 
     // ---- Utilities ----
 
-    static function escapeWideString(s:String):String {
+    public static function escapeWideString(s:String):String {
         var result = new StringBuf();
         for (i in 0...s.length) {
             var c = s.charAt(i);

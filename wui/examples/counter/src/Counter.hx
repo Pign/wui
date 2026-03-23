@@ -23,16 +23,16 @@ class Counter extends wui.App {
             new Text("Counter")
                 .font(Title)
                 .padding(),
-            new Text("0")
+            new Text("Count: " + count)
                 .font(TitleLarge)
                 .foregroundColor(AccentColor)
                 .padding(),
             new HStack([
-                new Button("-")
+                new Button("-", null, count.dec(1))
                     .padding(),
-                new Button("Reset")
+                new Button("Reset", null, count.setTo(0))
                     .padding(),
-                new Button("+")
+                new Button("+", null, count.inc(1))
                     .padding()
             ]).spacing(8),
             new Spacer()

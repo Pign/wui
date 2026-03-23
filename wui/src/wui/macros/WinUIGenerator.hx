@@ -328,15 +328,40 @@ class WinUIGenerator {
                 { viewType: "Grid", children: children, modifiers: [], properties: new Map() };
 
             case "wui.ui.Text":
-                var text = args.length > 0 ? extractStringOrExpr(args[0]) : "Text";
                 var props:Map<String, Dynamic> = new Map();
-                props.set("text", text);
+                // Check for state-bound text (e.g., "Count: " + count)
+                var textArg = args.length > 0 ? args[0] : null;
+                // Resolve local variable if needed
+                if (textArg != null) {
+                    switch (textArg.expr) {
+                        case TLocal(v):
+                            var resolved = localExprs.get(v.name);
+                            if (resolved != null) textArg = resolved;
+                        default:
+                    }
+                }
+                var bound = textArg != null ? extractStateBoundText(textArg) : null;
+                if (bound != null) {
+                    props.set("text", bound.text);
+                    props.set("boundState", bound.boundState);
+                    props.set("boundFormat", bound.format);
+                } else {
+                    var text = args.length > 0 ? extractStringOrExpr(args[0]) : "Text";
+                    props.set("text", text);
+                }
                 { viewType: "TextBlock", children: [], modifiers: [], properties: props };
 
             case "wui.ui.Button":
                 var label = args.length > 0 ? extractStringOrExpr(args[0]) : "Button";
                 var props:Map<String, Dynamic> = new Map();
                 props.set("label", label);
+                // args[1] = icon (optional), args[2] = action (StateAction)
+                if (args.length > 2) {
+                    var actionCode = extractStateAction(args[2]);
+                    if (actionCode != null) {
+                        props.set("onClick", actionCode);
+                    }
+                }
                 { viewType: "Button", children: [], modifiers: [], properties: props };
 
             case "wui.ui.Spacer":
@@ -597,6 +622,206 @@ class WinUIGenerator {
             default:
                 return "";
         }
+    }
+
+    /**
+     * Check if an expression references a @:state field.
+     * Returns the field name if it does, null otherwise.
+     */
+    static function extractStateFieldRef(expr:TypedExpr):String {
+        if (expr == null) return null;
+        switch (expr.expr) {
+            case TField(obj, fa):
+                // state.value access — check if obj is a state field
+                var fieldName = switch (fa) {
+                    case FInstance(_, _, cf): cf.get().name;
+                    case FDynamic(s): s;
+                    default: null;
+                };
+                if (fieldName == "value") return extractStateFieldRef(obj);
+                return null;
+
+            case TLocal(v):
+                // Check if this local is a known state field
+                var resolved = localExprs.get(v.name);
+                if (resolved != null) return extractStateFieldRef(resolved);
+                // Check against state fields
+                for (sf in UIBuilder.stateFields) {
+                    if (v.name == sf.name) return sf.name;
+                }
+                return null;
+
+            case TField(_, fa):
+                var name = switch (fa) {
+                    case FInstance(_, _, cf): cf.get().name;
+                    case FDynamic(s): s;
+                    default: null;
+                };
+                // Direct field reference like this.count
+                if (name != null) {
+                    for (sf in UIBuilder.stateFields) {
+                        if (name == sf.name) return sf.name;
+                    }
+                }
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Try to extract a state action from a typed expression.
+     * Detects patterns like: count.inc(1), count.dec(1), count.setTo(0), count.tog()
+     * Returns a C++ code string or null.
+     */
+    static function extractStateAction(expr:TypedExpr):String {
+        if (expr == null) return null;
+
+        // Resolve local variables
+        switch (expr.expr) {
+            case TLocal(v):
+                var resolved = localExprs.get(v.name);
+                if (resolved != null) return extractStateAction(resolved);
+            default:
+        }
+
+        switch (expr.expr) {
+            case TCall(func, args):
+                switch (func.expr) {
+                    case TField(obj, fa):
+                        var methodName = switch (fa) {
+                            case FInstance(_, _, cf): cf.get().name;
+                            case FDynamic(s): s;
+                            default: null;
+                        };
+
+                        // obj should be a state field
+                        var stateName = extractStateFieldRef(obj);
+                        if (stateName == null) return null;
+
+                        var amount = args.length > 0 ? extractFloatValue(args[0]) : null;
+                        var amountStr = amount != null ? Std.string(Std.int(amount)) : "1";
+
+                        return switch (methodName) {
+                            case "inc": 's_$stateName += $amountStr; notify_$stateName();';
+                            case "dec": 's_$stateName -= $amountStr; notify_$stateName();';
+                            case "setTo":
+                                var val = amount != null ? Std.string(Std.int(amount)) : "0";
+                                's_$stateName = $val; notify_$stateName();';
+                            case "tog": 's_$stateName = !s_$stateName; notify_$stateName();';
+                            default: null;
+                        };
+                    default:
+                }
+            default:
+        }
+        return null;
+    }
+
+    /**
+     * Analyze a Text argument for state-bound expressions.
+     * Detects: "prefix" + stateField patterns.
+     * Returns {text, boundState, format} or null if not state-bound.
+     */
+    /**
+     * Recursively search an expression for a state field reference,
+     * unwrapping calls like .toString(), Std.string(), etc.
+     */
+    static function deepExtractStateRef(expr:TypedExpr):String {
+        if (expr == null) return null;
+
+        // Direct state ref
+        var direct = extractStateFieldRef(expr);
+        if (direct != null) return direct;
+
+        switch (expr.expr) {
+            case TLocal(v):
+                // Check if local name matches a state field
+                for (sf in UIBuilder.stateFields) {
+                    if (v.name == sf.name) return sf.name;
+                }
+                var resolved = localExprs.get(v.name);
+                if (resolved != null) return deepExtractStateRef(resolved);
+            case TCall(func, args):
+                // Unwrap: Std.string(count), count.toString(), etc.
+                for (arg in args) {
+                    var found = deepExtractStateRef(arg);
+                    if (found != null) return found;
+                }
+                // Check the function target too (for count.toString())
+                switch (func.expr) {
+                    case TField(obj, _):
+                        return deepExtractStateRef(obj);
+                    default:
+                }
+            case TField(obj, fa):
+                // Check field name against state fields
+                var fName = switch (fa) {
+                    case FInstance(_, _, cf): cf.get().name;
+                    case FDynamic(s): s;
+                    default: null;
+                };
+                if (fName != null) {
+                    for (sf in UIBuilder.stateFields) {
+                        if (fName == sf.name) return sf.name;
+                    }
+                }
+                return deepExtractStateRef(obj);
+            default:
+        }
+        return null;
+    }
+
+    static function extractStateBoundText(expr:TypedExpr):{text:String, boundState:String, format:String} {
+        if (expr == null) return null;
+
+        // Resolve locals
+        switch (expr.expr) {
+            case TLocal(v):
+                var resolved = localExprs.get(v.name);
+                if (resolved != null) return extractStateBoundText(resolved);
+            default:
+        }
+
+        switch (expr.expr) {
+            case TBinop(op, e1, e2):
+                var opName = Std.string(op);
+                if (opName == "OpAdd") {
+                    var prefix = extractStringOrExpr(e1);
+                    // Deep search for state ref in e2 (may be wrapped in toString/Std.string)
+                    var stateRef = deepExtractStateRef(e2);
+                    if (prefix != null && prefix != "..." && stateRef != null) {
+                        var escaped = UIBuilder.escapeWideString(prefix);
+                        return {
+                            text: prefix + "0",
+                            boundState: stateRef,
+                            format: 'CTRL.Text(winrt::hstring(L"$escaped" + std::to_wstring(s_$stateRef)));'
+                        };
+                    }
+                    // count + "suffix"
+                    var stateRef1 = deepExtractStateRef(e1);
+                    var suffix = extractStringOrExpr(e2);
+                    if (stateRef1 != null && suffix != null && suffix != "...") {
+                        var escaped = UIBuilder.escapeWideString(suffix);
+                        return {
+                            text: "0" + suffix,
+                            boundState: stateRef1,
+                            format: 'CTRL.Text(winrt::hstring(std::to_wstring(s_$stateRef1) + L"$escaped"));'
+                        };
+                    }
+                }
+            default:
+                // Check if the expression itself is a state reference
+                var stateRef = deepExtractStateRef(expr);
+                if (stateRef != null) {
+                    return {
+                        text: "0",
+                        boundState: stateRef,
+                        format: 'CTRL.Text(winrt::hstring(std::to_wstring(s_$stateRef)));'
+                    };
+                }
+        }
+        return null;
     }
 
     static function defaultNode():ViewNode {
