@@ -4,7 +4,7 @@ on:
   push:
     branches: [master]
     paths:
-      - 'docs/**'
+      - 'wui/docs/**'
   workflow_dispatch:
 
 permissions:
@@ -27,6 +27,6 @@ jobs:
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs
+          path: wui/docs
       - id: deployment
         uses: actions/deploy-pages@v4
