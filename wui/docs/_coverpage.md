@@ -10,4 +10,4 @@
 - Inspired by [Pign/sui](https://github.com/Pign/sui) for SwiftUI
 
 [Get Started](getting-started.md)
-[GitHub](https://github.com/)
+[GitHub](https://github.com/Pign/wui)
