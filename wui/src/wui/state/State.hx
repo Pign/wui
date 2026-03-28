@@ -52,6 +52,16 @@ class State<T> {
         _listeners.remove(fn);
     }
 
+    /** Read the current value. Alias for `value`. **/
+    public function get():T {
+        return _value;
+    }
+
+    /** Set a new value and notify subscribers. Alias for `value = x`. **/
+    public function set(v:T):Void {
+        value = v;
+    }
+
     // --- Convenience StateAction builders ---
 
     /** Create an action that increments this state by amount. */

@@ -15,9 +15,11 @@ var count = new State<Int>(0, "count");
 
 // Read
 trace(count.value);    // 0
+trace(count.get());    // 0  (alias)
 
 // Write (notifies all subscribers)
 count.value = 5;
+count.set(10);         // alias for count.value = 10
 
 // Subscribe to changes
 count.subscribe((newValue) -> trace("count is now: " + newValue));
@@ -43,6 +45,8 @@ new State<T>(initial:T, stateName:String)
 
 | Method | Description |
 |--------|-------------|
+| `get():T` | Read the current value. Alias for `.value`. |
+| `set(v:T):Void` | Set a new value and notify subscribers. Alias for `.value = v`. |
 | `subscribe(fn:T -> Void)` | Register a listener called on every value change. |
 | `unsubscribe(fn:T -> Void)` | Remove a previously registered listener. |
 | `inc(amount)` | Returns a `StateAction.Increment` for this state. |
