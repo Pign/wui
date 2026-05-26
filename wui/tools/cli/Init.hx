@@ -7,6 +7,7 @@ import haxe.io.Path;
 class Init {
     public static function run(cwd:String, args:Array<String>) {
         var name = args.length > 0 ? args[0] : "MyApp";
+        var className = toClassName(name);
         var projectDir = Path.join([cwd, name]);
 
         if (FileSystem.exists(projectDir)) {
@@ -24,16 +25,31 @@ class Init {
         File.saveContent(Path.join([projectDir, "wui.json"]), buildWuiJson(name));
 
         // Write build.hxml
-        File.saveContent(Path.join([projectDir, "build.hxml"]), buildHxml(name));
+        File.saveContent(Path.join([projectDir, "build.hxml"]), buildHxml(className));
 
         // Write main source file
-        File.saveContent(Path.join([projectDir, "src", '$name.hx']), buildMainSource(name));
+        File.saveContent(Path.join([projectDir, "src", '$className.hx']), buildMainSource(className, name));
 
         Sys.println('Project created at: $projectDir');
         Sys.println('');
         Sys.println('Next steps:');
         Sys.println('  cd $name');
         Sys.println('  wui run');
+    }
+
+    static function toClassName(name:String):String {
+        var splitter = ~/[^a-zA-Z0-9]+/g;
+        var parts = splitter.split(name);
+        var result = "";
+        for (part in parts) {
+            if (part.length > 0) {
+                result += part.charAt(0).toUpperCase() + part.substr(1);
+            }
+        }
+        if (result.length == 0) return "MyApp";
+        var first = result.charAt(0);
+        if (first >= "0" && first <= "9") result = "App" + result;
+        return result;
     }
 
     static function buildWuiJson(name:String):String {
@@ -48,16 +64,16 @@ class Init {
 ';
     }
 
-    static function buildHxml(name:String):String {
+    static function buildHxml(className:String):String {
         return '-cp src
 -lib wui
 --macro wui.macros.WinUIGenerator.register()
--main $name
+-main $className
 -cpp build/cpp
 ';
     }
 
-    static function buildMainSource(name:String):String {
+    static function buildMainSource(className:String, displayName:String):String {
         return 'import wui.App;
 import wui.View;
 import wui.ui.VStack;
@@ -66,11 +82,11 @@ import wui.ui.Button;
 import wui.ui.Spacer;
 import wui.modifiers.ViewModifier.FontStyle;
 
-class $name extends wui.App {
+class $className extends wui.App {
     static function main() {}
 
     override function appName():String {
-        return "$name";
+        return "$displayName";
     }
 
     override function body():View {
