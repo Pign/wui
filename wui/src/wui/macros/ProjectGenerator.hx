@@ -5,6 +5,7 @@ import haxe.macro.Context;
 import sys.io.File;
 import sys.FileSystem;
 import haxe.io.Path;
+import haxe.Json;
 #end
 
 /**
@@ -16,6 +17,8 @@ import haxe.io.Path;
  */
 class ProjectGenerator {
     #if macro
+
+    static inline var DEFAULT_SDK_VERSION = "1.5.240627000";
 
     /** Write file only if content has changed (avoids locking issues with MSBuild). */
     public static function writeIfChanged(path:String, content:String):Void {
@@ -31,18 +34,46 @@ class ProjectGenerator {
         }
     }
 
+    /**
+     * Read the concrete Windows App SDK version from wui.json in the current
+     * working directory. The .vcxproj imports props/targets via paths that
+     * include the version number, so wildcards (e.g. "1.8.*") cannot be used
+     * here — NuGet would resolve them at restore time but the .vcxproj would
+     * still reference the wildcard path literally and fail.
+     */
+    static function readSdkVersion():String {
+        var wuiJsonPath = Path.join([Sys.getCwd(), "wui.json"]);
+        if (!FileSystem.exists(wuiJsonPath)) return DEFAULT_SDK_VERSION;
+        var config:Dynamic;
+        try {
+            config = Json.parse(File.getContent(wuiJsonPath));
+        } catch (e:Dynamic) {
+            Sys.println('[wui] Warning: wui.json is not valid JSON, falling back to SDK ${DEFAULT_SDK_VERSION}');
+            return DEFAULT_SDK_VERSION;
+        }
+        var v:String = config.windowsAppSdkVersion;
+        if (v == null || v.length == 0) return DEFAULT_SDK_VERSION;
+        if (v.indexOf("*") >= 0) {
+            Sys.println('[wui] Warning: windowsAppSdkVersion "$v" contains a wildcard. The .vcxproj needs a concrete version (e.g. "1.5.240627000"). Falling back to ${DEFAULT_SDK_VERSION}.');
+            return DEFAULT_SDK_VERSION;
+        }
+        return v;
+    }
+
     public static function generate(appName:String, outputDir:String):Void {
         if (!FileSystem.exists(outputDir)) {
             FileSystem.createDirectory(outputDir);
         }
 
-        generateVcxproj(appName, outputDir);
-        generatePackagesConfig(outputDir);
+        var sdkVersion = readSdkVersion();
+
+        generateVcxproj(appName, outputDir, sdkVersion);
+        generatePackagesConfig(outputDir, sdkVersion);
         generatePch(outputDir);
         generateAppManifest(appName, outputDir);
     }
 
-    static function generateVcxproj(appName:String, outputDir:String):Void {
+    static function generateVcxproj(appName:String, outputDir:String, sdkVersion:String):Void {
         // Paths relative to the .vcxproj location (build/winui/)
         var cppDir = "..\\cpp";
         var packagesDir = "..\\packages";
@@ -95,7 +126,7 @@ class ProjectGenerator {
 
   <!-- NuGet package props -->
   <Import Project="$packagesDir\\Microsoft.Windows.CppWinRT.2.0.240405.15\\build\\native\\Microsoft.Windows.CppWinRT.props" Condition="Exists(\'$packagesDir\\Microsoft.Windows.CppWinRT.2.0.240405.15\\build\\native\\Microsoft.Windows.CppWinRT.props\')" />
-  <Import Project="$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.props" Condition="Exists(\'$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.props\')" />
+  <Import Project="$packagesDir\\Microsoft.WindowsAppSDK.${sdkVersion}\\build\\native\\Microsoft.WindowsAppSDK.props" Condition="Exists(\'$packagesDir\\Microsoft.WindowsAppSDK.${sdkVersion}\\build\\native\\Microsoft.WindowsAppSDK.props\')" />
 
   <ItemDefinitionGroup>
     <ClCompile>
@@ -138,7 +169,7 @@ class ProjectGenerator {
 
   <!-- NuGet package targets -->
   <Import Project="$packagesDir\\Microsoft.Windows.CppWinRT.2.0.240405.15\\build\\native\\Microsoft.Windows.CppWinRT.targets" Condition="Exists(\'$packagesDir\\Microsoft.Windows.CppWinRT.2.0.240405.15\\build\\native\\Microsoft.Windows.CppWinRT.targets\')" />
-  <Import Project="$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.targets" Condition="Exists(\'$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.targets\')" />
+  <Import Project="$packagesDir\\Microsoft.WindowsAppSDK.${sdkVersion}\\build\\native\\Microsoft.WindowsAppSDK.targets" Condition="Exists(\'$packagesDir\\Microsoft.WindowsAppSDK.${sdkVersion}\\build\\native\\Microsoft.WindowsAppSDK.targets\')" />
   <Import Project="$packagesDir\\Microsoft.Windows.SDK.BuildTools.10.0.22621.756\\build\\native\\Microsoft.Windows.SDK.BuildTools.targets" Condition="Exists(\'$packagesDir\\Microsoft.Windows.SDK.BuildTools.10.0.22621.756\\build\\native\\Microsoft.Windows.SDK.BuildTools.targets\')" />
 
 
@@ -147,10 +178,10 @@ class ProjectGenerator {
         writeIfChanged(Path.join([outputDir, '$appName.vcxproj']), content);
     }
 
-    static function generatePackagesConfig(outputDir:String):Void {
+    static function generatePackagesConfig(outputDir:String, sdkVersion:String):Void {
         var content = '<?xml version="1.0" encoding="utf-8"?>
 <packages>
-  <package id="Microsoft.WindowsAppSDK" version="1.5.240627000" targetFramework="native" />
+  <package id="Microsoft.WindowsAppSDK" version="$sdkVersion" targetFramework="native" />
   <package id="Microsoft.Windows.CppWinRT" version="2.0.240405.15" targetFramework="native" />
   <package id="Microsoft.Windows.SDK.BuildTools" version="10.0.22621.756" targetFramework="native" />
   <package id="Microsoft.Windows.ImplementationLibrary" version="1.0.240122.1" targetFramework="native" />
