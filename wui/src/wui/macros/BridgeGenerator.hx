@@ -5,6 +5,7 @@ import haxe.macro.Context;
 import sys.io.File;
 import sys.FileSystem;
 import haxe.io.Path;
+import haxe.Json;
 #end
 
 /**
@@ -14,13 +15,13 @@ import haxe.io.Path;
  */
 class BridgeGenerator {
     #if macro
-    public static function generate(appName:String, outputDir:String, windowWidth:Int, windowHeight:Int):Void {
+    public static function generate(appName:String, displayName:String, outputDir:String, windowWidth:Int, windowHeight:Int):Void {
         if (!FileSystem.exists(outputDir)) {
             FileSystem.createDirectory(outputDir);
         }
 
         generateAppHeader(appName, outputDir);
-        generateAppSource(appName, outputDir, windowWidth, windowHeight);
+        generateAppSource(appName, displayName, outputDir, windowWidth, windowHeight);
         generateRuntime(outputDir);
     }
 
@@ -62,10 +63,40 @@ private:
         ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.h"]), content);
     }
 
-    static function generateAppSource(appName:String, outputDir:String, windowWidth:Int, windowHeight:Int):Void {
+    /** Optional debug console — opt-in via `"debugConsole": true` in
+        wui.json. When set, wWinMain allocates a Win32 console at boot
+        and redirects stdout/stderr/stdin to it so `Sys.println`,
+        `printf`, etc. become visible. */
+    static function readDebugConsole():Bool {
+        var p = Path.join([Sys.getCwd(), "wui.json"]);
+        if (!FileSystem.exists(p)) return false;
+        try {
+            var cfg:Dynamic = Json.parse(File.getContent(p));
+            return cfg.debugConsole == true;
+        } catch (e:Dynamic) {
+            return false;
+        }
+    }
+
+    static function generateAppSource(appName:String, displayName:String, outputDir:String, windowWidth:Int, windowHeight:Int):Void {
+        var consoleInit = readDebugConsole()
+            ? '    // Debug console (opt-in via wui.json "debugConsole": true).
+    // Sys.println, printf, std::cout become visible in the attached console.
+    AllocConsole();
+    FILE* _dummy = nullptr;
+    freopen_s(&_dummy, "CONOUT$$", "w", stdout);
+    freopen_s(&_dummy, "CONOUT$$", "w", stderr);
+    freopen_s(&_dummy, "CONIN$$", "r", stdin);
+    SetConsoleTitleW(L"$displayName — Debug Console");
+    printf("[wui] Debug console attached\\n");
+
+'
+            : '';
+
         var content = '#include "pch.h"
 #include "App.h"
 #include "MainWindow.h"
+#include <cstdio>
 
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 
@@ -80,7 +111,7 @@ void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
         winrt::Microsoft::UI::Xaml::Controls::XamlControlsResources());
 
     m_window = winrt_xaml::Window();
-    m_window.Title(L"$appName");
+    m_window.Title(L"$displayName");
 
     // Store the dispatcher queue for UI thread marshaling
     wui::runtime::dispatcherQueue = m_window.DispatcherQueue();
@@ -100,7 +131,7 @@ void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
 // Application entry point
 int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
-    winrt::init_apartment(winrt::apartment_type::single_threaded);
+$consoleInit    winrt::init_apartment(winrt::apartment_type::single_threaded);
 
     // Bootstrap the Haxe runtime: hx::Boot(), __boot_all(), then call
     // the App subclass static main(). Required for @:state fields and

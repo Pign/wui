@@ -57,12 +57,24 @@ class StateMacro {
                             params: t != null ? [TPType(t)] : []
                         });
 
+                        // Forward the declared default expression to the
+                        // C++ codegen by stashing it in a `@:wuiInitial`
+                        // meta — collectStateFields reads it back to
+                        // initialise `static <type> s_<name> = <value>`
+                        // in MainWindow.cpp.
+                        var existingMeta = field.meta != null ? field.meta : [];
+                        var withInitial = existingMeta.concat([{
+                            name: ":wuiInitial",
+                            params: [initialValue],
+                            pos: field.pos
+                        }]);
+
                         newFields.push({
                             name: field.name,
                             doc: field.doc,
                             access: field.access,
                             pos: field.pos,
-                            meta: field.meta,
+                            meta: withInitial,
                             kind: FVar(stateType, null)
                         });
 

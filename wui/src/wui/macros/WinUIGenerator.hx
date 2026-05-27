@@ -30,6 +30,16 @@ class WinUIGenerator {
     static var registered:Bool = false;
     static var collectedTypes:Array<Type> = [];
 
+    /** Map of fully-qualified Haxe static function path -> generated C
+        wrapper name. Each unique callback gets a wrapper, regenerated
+        only on first reference (subsequent references reuse the name). */
+    static var callbackRegistry:Map<String, String> = new Map();
+
+    /** Anonymous lambdas passed to `StateAction.Custom(() -> {...})`.
+        We can't share wrappers (each lambda has its own body), so this
+        is a plain list. Names are unique within the build. */
+    static var lambdaRegistry:Array<{name:String, body:haxe.macro.Type.TypedExpr}> = [];
+
     /**
      * Call this from build.hxml:
      *   --macro wui.macros.WinUIGenerator.register()
@@ -38,7 +48,11 @@ class WinUIGenerator {
         if (registered) return;
         registered = true;
 
-        // Collect types after typing phase
+        // Collect types AND run the analysis during typing — this is
+        // crucial because `Context.defineType` (used by
+        // `emitCallbackModule`) must run before code generation starts,
+        // otherwise the generated `wui.generated.Callbacks` class never
+        // makes it into the static lib.
         Context.onAfterTyping(function(types:Array<haxe.macro.Type.ModuleType>) {
             for (mt in types) {
                 switch (mt) {
@@ -50,54 +64,135 @@ class WinUIGenerator {
                     default:
                 }
             }
+            if (!analyzed && collectedTypes.length > 0) {
+                analyze();
+                analyzed = true;
+            }
         });
 
-        // Generate after all compilation is done
+        // Emit the C++/WinRT files after all generation is done.
         Context.onAfterGenerate(function() {
-            generate();
+            emit();
         });
     }
 
-    static function generate():Void {
-        // Find the output directory from compiler config
+    static var analyzed:Bool = false;
+    static var cachedViewTree:ViewNode;
+    static var cachedAppName:String;
+    static var cachedDisplayName:String;
+    static var cachedWindowWidth:Int;
+    static var cachedWindowHeight:Int;
+
+    /** Analyse the first collected App subclass: extract names, state
+        fields, body() ViewNode tree, and (critically) emit the
+        synthesised `wui.generated.Callbacks` and `wui.generated.StateAccessor`
+        modules so hxcpp picks them up during normal compilation. */
+    static function analyze():Void {
+        var appType = collectedTypes[0];
+        cachedAppName = getClassName(appType);
+        cachedDisplayName = getDisplayName(appType);
+        cachedWindowWidth = getWindowWidth(appType);
+        cachedWindowHeight = getWindowHeight(appType);
+        UIBuilder.stateFields = collectStateFields(appType);
+        cachedViewTree = buildViewTree(appType);
+        emitCallbackModule();
+        // Note: state read/write from Haxe lambdas goes through the
+        // stable `wui.state.StateBridge` class in the wui lib. The
+        // per-type dispatch functions it calls are emitted by UIBuilder
+        // when MainWindow.cpp is generated — no per-app generated type.
+    }
+
+    /** Emit a `wui.generated.StateAccessor` Haxe class with get/set
+        methods for every @:state field. Each method bridges to the
+        matching `extern "C" clw_state_get/set_<name>` defined in
+        MainWindow.cpp via `untyped __cpp__`. This is what lambda
+        click handlers use to read / write @:state fields. */
+    static function emitStateAccessorModule():Void {
+        if (UIBuilder.stateFields.length == 0) return;
+        var pos = haxe.macro.Context.currentPos();
+        var fields:Array<haxe.macro.Expr.Field> = [];
+        for (sf in UIBuilder.stateFields) {
+            var setterBody:String;
+            var getterBody:String;
+            var argType:haxe.macro.Expr.ComplexType;
+            var retType:haxe.macro.Expr.ComplexType;
+            switch (sf.type) {
+                case "std::wstring":
+                    argType = macro :String; retType = macro :String;
+                    setterBody = '{ untyped __cpp__(\'clw_state_set_${sf.name}(reinterpret_cast<const wchar_t*>(({0}).wc_str()), ({0}).length)\', v); }';
+                    getterBody = '{ var r:String = ""; untyped __cpp__(\'const wchar_t* _buf; int _len; clw_state_get_${sf.name}(&_buf, &_len); {0} = ::String((const char16_t*)_buf, _len);\', r); return r; }';
+                case "int":
+                    argType = macro :Int; retType = macro :Int;
+                    setterBody = '{ untyped __cpp__(\'clw_state_set_${sf.name}({0})\', v); }';
+                    getterBody = '{ var r:Int = 0; untyped __cpp__(\'{0} = clw_state_get_${sf.name}()\', r); return r; }';
+                case "double":
+                    argType = macro :Float; retType = macro :Float;
+                    setterBody = '{ untyped __cpp__(\'clw_state_set_${sf.name}({0})\', v); }';
+                    getterBody = '{ var r:Float = 0.0; untyped __cpp__(\'{0} = clw_state_get_${sf.name}()\', r); return r; }';
+                case "bool":
+                    argType = macro :Bool; retType = macro :Bool;
+                    setterBody = '{ untyped __cpp__(\'clw_state_set_${sf.name}({0})\', v); }';
+                    getterBody = '{ var r:Bool = false; untyped __cpp__(\'{0} = clw_state_get_${sf.name}()\', r); return r; }';
+                default:
+                    continue;
+            }
+            fields.push({
+                name: 'set_${sf.name}',
+                pos: pos,
+                meta: [{ name: ":keep", pos: pos }],
+                access: [APublic, AStatic],
+                kind: FFun({
+                    args: [{ name: "v", type: argType }],
+                    ret: macro :Void,
+                    expr: haxe.macro.Context.parse(setterBody, pos)
+                })
+            });
+            fields.push({
+                name: 'get_${sf.name}',
+                pos: pos,
+                meta: [{ name: ":keep", pos: pos }],
+                access: [APublic, AStatic],
+                kind: FFun({
+                    args: [],
+                    ret: retType,
+                    expr: haxe.macro.Context.parse(getterBody, pos)
+                })
+            });
+        }
+        haxe.macro.Context.defineType({
+            pos: pos,
+            pack: ["wui", "generated"],
+            name: "StateAccessor",
+            kind: TDClass(),
+            fields: fields,
+            meta: [{ name: ":keep", pos: pos }]
+        });
+    }
+
+    /** Emit the C++/WinRT project files. Runs at `onAfterGenerate`, by
+        which time `analyze()` has populated everything we need. */
+    static function emit():Void {
         var cppOutput = Compiler.getOutput();
         if (cppOutput == null) cppOutput = "build/cpp";
-
         var buildDir = Path.directory(cppOutput);
         if (buildDir == "") buildDir = ".";
         var winuiDir = Path.join([buildDir, "winui"]);
+        if (!FileSystem.exists(winuiDir)) FileSystem.createDirectory(winuiDir);
 
-        if (!FileSystem.exists(winuiDir)) {
-            FileSystem.createDirectory(winuiDir);
-        }
-
-        if (collectedTypes.length == 0) {
+        if (cachedViewTree == null) {
             Context.warning("wui: No App subclass found. Create a class extending wui.App.", Context.currentPos());
             return;
         }
 
-        // Use the first App subclass found
-        var appType = collectedTypes[0];
-        var appName = getAppName(appType);
-        var windowWidth = getWindowWidth(appType);
-        var windowHeight = getWindowHeight(appType);
+        Sys.println('[wui] Generating C++/WinRT project for "$cachedAppName" (display "$cachedDisplayName")...');
 
-        // Collect @:state fields
-        UIBuilder.stateFields = collectStateFields(appType);
-
-        // Build the view tree from body()
-        var viewTree = buildViewTree(appType);
-
-        // Generate all files
-        Sys.println('[wui] Generating C++/WinRT project for "$appName"...');
-
-        ProjectGenerator.generate(appName, winuiDir);
+        ProjectGenerator.generate(cachedAppName, winuiDir);
         Sys.println("[wui]   Generated .vcxproj, packages.config, pch.h");
 
-        BridgeGenerator.generate(appName, winuiDir, windowWidth, windowHeight);
+        BridgeGenerator.generate(cachedAppName, cachedDisplayName, winuiDir, cachedWindowWidth, cachedWindowHeight);
         Sys.println("[wui]   Generated App.h, App.cpp, WuiRuntime.h");
 
-        UIBuilder.generateMainWindow(viewTree, winuiDir);
+        UIBuilder.generateMainWindow(cachedViewTree, winuiDir);
         Sys.println("[wui]   Generated MainWindow.h, MainWindow.cpp");
 
         Sys.println('[wui] C++/WinRT project generated at: $winuiDir');
@@ -119,14 +214,27 @@ class WinUIGenerator {
                             if (typeName == "State" && params.length > 0) {
                                 var cppType = "int"; // default
                                 var initial = "0";
+
+                                // Pull the declared default expression out of
+                                // the `@:wuiInitial` meta StateMacro stashed.
+                                var explicitInitial:String = null;
+                                for (m in field.meta.get()) {
+                                    if (m.name == ":wuiInitial" && m.params != null && m.params.length > 0) {
+                                        explicitInitial = exprToCppLiteral(m.params[0]);
+                                    }
+                                }
+
                                 switch (params[0]) {
                                     case TAbstract(aref, _):
                                         var aname = aref.get().name;
-                                        if (aname == "Int") { cppType = "int"; initial = "0"; }
-                                        else if (aname == "Float") { cppType = "double"; initial = "0.0"; }
-                                        else if (aname == "Bool") { cppType = "bool"; initial = "false"; }
+                                        if (aname == "Int") { cppType = "int"; initial = explicitInitial != null ? explicitInitial : "0"; }
+                                        else if (aname == "Float") { cppType = "double"; initial = explicitInitial != null ? explicitInitial : "0.0"; }
+                                        else if (aname == "Bool") { cppType = "bool"; initial = explicitInitial != null ? explicitInitial : "false"; }
                                     case TInst(sref, _):
-                                        if (sref.get().name == "String") { cppType = "std::wstring"; initial = 'L""'; }
+                                        if (sref.get().name == "String") {
+                                            cppType = "std::wstring";
+                                            initial = explicitInitial != null ? explicitInitial : 'L""';
+                                        }
                                     default:
                                 }
                                 result.push({ name: field.name, type: cppType, initial: initial });
@@ -139,6 +247,26 @@ class WinUIGenerator {
         return result;
     }
 
+    /** Render an untyped (build-macro-time) Expr as a C++ literal of
+        the matching type — used to seed `s_<name>` from `@:wuiInitial`
+        in MainWindow.cpp. Returns null when the expression isn't a
+        recognisable literal (caller falls back to a per-type default). */
+    static function exprToCppLiteral(expr:haxe.macro.Expr):String {
+        if (expr == null) return null;
+        switch (expr.expr) {
+            case EConst(CString(s, _)):
+                return 'L"' + UIBuilder.escapeWideString(s) + '"';
+            case EConst(CInt(s, _)):
+                return s;
+            case EConst(CFloat(s, _)):
+                return s;
+            case EConst(CIdent(i)) if (i == "true" || i == "false"):
+                return i;
+            default:
+                return null;
+        }
+    }
+
     static function isAppSubclass(cls:ClassType):Bool {
         if (cls.superClass == null) return false;
         var superRef = cls.superClass.t.get();
@@ -146,10 +274,21 @@ class WinUIGenerator {
         return isAppSubclass(superRef);
     }
 
+    /** Plain Haxe class name — used for filenames + the App C++ class. */
+    static function getClassName(type:Type):String {
+        switch (type) {
+            case TInst(ref, _): return ref.get().name;
+            default: return "WuiApp";
+        }
+    }
+
     /**
-     * Extract the app name from the appName() method or class name.
+     * User-facing display name. Read from the `appName():String` override
+     * if it returns a string literal, else falls back to the class name.
+     * Used for the window title; never used for filenames (so it can
+     * contain spaces and non-ASCII).
      */
-    static function getAppName(type:Type):String {
+    static function getDisplayName(type:Type):String {
         switch (type) {
             case TInst(ref, _):
                 var cls = ref.get();
@@ -585,6 +724,11 @@ class WinUIGenerator {
                 }
             case TConst(TString(s)):
                 return s;
+            case TFunction(tf):
+                // `field.expr()` on a method wraps the body in a TFunction;
+                // recurse so override appName():String { return "..."; }
+                // is recognised (otherwise we fall back to the class name).
+                return extractStringReturn(tf.expr);
             default:
         }
         return null;
@@ -695,7 +839,9 @@ class WinUIGenerator {
 
     /**
      * Try to extract a state action from a typed expression.
-     * Detects patterns like: count.inc(1), count.dec(1), count.setTo(0), count.tog()
+     * Detects patterns like:
+     *   count.inc(1), count.dec(1), count.setTo(0), count.tog()
+     *   StateAction.Custom(MyApp.staticFn)  — auto-exposes via a wrapper
      * Returns a C++ code string or null.
      */
     static function extractStateAction(expr:TypedExpr):String {
@@ -711,6 +857,54 @@ class WinUIGenerator {
 
         switch (expr.expr) {
             case TCall(func, args):
+                // StateAction enum constructors:
+                //   Custom(fn), Sequence([...]), SetValue(state, value), Toggle(state).
+                // The macro intercepts these before they'd run at runtime.
+                switch (func.expr) {
+                    case TField(_, FEnum(_, ef)):
+                        switch (ef.name) {
+                            case "Custom" if (args.length >= 1):
+                                var arg = args[0];
+                                // Phase 1: static function reference.
+                                var path = extractStaticFunctionPath(arg);
+                                if (path != null) {
+                                    var wrapperName = registerCallback(path);
+                                    return '::wui::generated::Callbacks_obj::$wrapperName();';
+                                }
+                                // Phase 2: anonymous lambda. Lift via
+                                // `Context.storeTypedExpr` into a static
+                                // wrapper. The lambda body should use
+                                // `wui.generated.StateAccessor.set_X / get_X`
+                                // to read/write @:state fields (this.X
+                                // refs don't survive the lift to static).
+                                switch (arg.expr) {
+                                    case TFunction(tf):
+                                        var wrapperName = registerLambda(tf.expr);
+                                        return '::wui::generated::Callbacks_obj::$wrapperName();';
+                                    default:
+                                }
+                                haxe.macro.Context.error(
+                                    "StateAction.Custom expects a static function reference (MyApp.fn) or a lambda (() -> { ... })",
+                                    arg.pos
+                                );
+                                return null;
+
+                            case "Sequence" if (args.length >= 1):
+                                return extractSequenceAction(args[0]);
+
+                            case "SetValue" if (args.length >= 2):
+                                return extractSetValueAction(args[0], args[1]);
+
+                            case "Toggle" if (args.length >= 1):
+                                var stateName = extractStateFieldRef(args[0]);
+                                if (stateName == null) return null;
+                                return 's_$stateName = !s_$stateName; notify_$stateName();';
+
+                            case _:
+                        }
+                    default:
+                }
+
                 switch (func.expr) {
                     case TField(obj, fa):
                         var methodName = switch (fa) {
@@ -725,12 +919,26 @@ class WinUIGenerator {
 
                         var amount = args.length > 0 ? extractFloatValue(args[0]) : null;
                         var amountStr = amount != null ? Std.string(Std.int(amount)) : "1";
+                        var sf = findStateField(stateName);
+                        var stateType = sf != null ? sf.type : "int";
 
                         return switch (methodName) {
                             case "inc": 's_$stateName += $amountStr; notify_$stateName();';
                             case "dec": 's_$stateName -= $amountStr; notify_$stateName();';
                             case "setTo":
-                                var val = amount != null ? Std.string(Std.int(amount)) : "0";
+                                var val:String = switch (stateType) {
+                                    case "std::wstring":
+                                        var s = args.length > 0 ? extractStringOrExpr(args[0]) : null;
+                                        if (s == null || s == "...") s = "";
+                                        'L"' + UIBuilder.escapeWideString(s) + '"';
+                                    case "bool":
+                                        var b = args.length > 0 ? extractBoolValue(args[0]) : false;
+                                        b ? "true" : "false";
+                                    case "double":
+                                        amount != null ? Std.string(amount) : "0.0";
+                                    case _:
+                                        amount != null ? Std.string(Std.int(amount)) : "0";
+                                };
                                 's_$stateName = $val; notify_$stateName();';
                             case "tog": 's_$stateName = !s_$stateName; notify_$stateName();';
                             default: null;
@@ -818,7 +1026,7 @@ class WinUIGenerator {
                         var escaped = UIBuilder.escapeWideString(prefix);
                         var valueExpr = stateToWstring(stateRef);
                         return {
-                            text: prefix + "0",
+                            text: prefix + stateInitialText(stateRef),
                             boundState: stateRef,
                             format: 'CTRL.Text(winrt::hstring(L"$escaped" + $valueExpr));'
                         };
@@ -830,7 +1038,7 @@ class WinUIGenerator {
                         var escaped = UIBuilder.escapeWideString(suffix);
                         var valueExpr = stateToWstring(stateRef1);
                         return {
-                            text: "0" + suffix,
+                            text: stateInitialText(stateRef1) + suffix,
                             boundState: stateRef1,
                             format: 'CTRL.Text(winrt::hstring($valueExpr + L"$escaped"));'
                         };
@@ -840,14 +1048,178 @@ class WinUIGenerator {
                 // Check if the expression itself is a state reference
                 var stateRef = deepExtractStateRef(expr);
                 if (stateRef != null) {
+                    var valueExpr = stateToWstring(stateRef);
                     return {
-                        text: "0",
+                        text: stateInitialText(stateRef),
                         boundState: stateRef,
-                        format: 'CTRL.Text(winrt::hstring(std::to_wstring(s_$stateRef)));'
+                        format: 'CTRL.Text(winrt::hstring($valueExpr));'
                     };
                 }
         }
         return null;
+    }
+
+    /** Look up a state field by name. */
+    static function findStateField(name:String):{name:String, type:String, initial:String} {
+        for (sf in UIBuilder.stateFields) {
+            if (sf.name == name) return sf;
+        }
+        return null;
+    }
+
+    /**
+     * Resolve a typed expression to a fully-qualified Haxe static
+     * function path (e.g. "MyApp.startLogin" or "pkg.sub.Cls.fn").
+     * Returns null if the expression isn't a static reference.
+     */
+    static function extractStaticFunctionPath(expr:TypedExpr):String {
+        if (expr == null) return null;
+        switch (expr.expr) {
+            case TField(_, FStatic(cl, cf)):
+                var clsRef = cl.get();
+                var parts = clsRef.pack.copy();
+                parts.push(clsRef.name);
+                parts.push(cf.get().name);
+                return parts.join(".");
+            default:
+                return null;
+        }
+    }
+
+    /** Render a literal value as a C++ expression of the requested
+        state type. Used by SetValue / setTo to coerce the user's
+        argument into the right shape for `s_X = ...` assignment. */
+    static function renderLiteralForType(expr:TypedExpr, type:String):String {
+        switch (type) {
+            case "std::wstring":
+                var s = extractStringOrExpr(expr);
+                if (s == null || s == "...") s = "";
+                return 'L"' + UIBuilder.escapeWideString(s) + '"';
+            case "bool":
+                return extractBoolValue(expr) ? "true" : "false";
+            case "double":
+                var f = extractFloatValue(expr);
+                return f != null ? Std.string(f) : "0.0";
+            case _:
+                var f = extractFloatValue(expr);
+                return f != null ? Std.string(Std.int(f)) : "0";
+        }
+    }
+
+    /** Resolve `StateAction.SetValue(stateRef, value)` to C++ assign +
+        notify, with the value coerced to the state's declared type. */
+    static function extractSetValueAction(stateExpr:TypedExpr, valueExpr:TypedExpr):String {
+        var stateName = extractStateFieldRef(stateExpr);
+        if (stateName == null) return null;
+        var sf = findStateField(stateName);
+        var stateType = sf != null ? sf.type : "int";
+        var val = renderLiteralForType(valueExpr, stateType);
+        return 's_$stateName = $val; notify_$stateName();';
+    }
+
+    /** Resolve `StateAction.Sequence([...])` to a concatenation of the
+        C++ snippets for each inner action. Inner actions may themselves
+        be enum constructors or method calls — recursion handles both. */
+    static function extractSequenceAction(arrayExpr:TypedExpr):String {
+        switch (arrayExpr.expr) {
+            case TArrayDecl(actions):
+                var codes:Array<String> = [];
+                for (action in actions) {
+                    var code = extractStateAction(action);
+                    if (code != null) codes.push(code);
+                }
+                return codes.join(" ");
+            default:
+                return null;
+        }
+    }
+
+    /** Register a static-function callback; idempotent. Returns the
+        generated wrapper name. */
+    static function registerCallback(fnPath:String):String {
+        var existing = callbackRegistry.get(fnPath);
+        if (existing != null) return existing;
+        var n = Lambda.count(callbackRegistry) + lambdaRegistry.length;
+        var wrapperName = 'wui_cb_$n';
+        callbackRegistry.set(fnPath, wrapperName);
+        return wrapperName;
+    }
+
+    /** Register an anonymous lambda body; not idempotent (each lambda
+        is unique). Returns the generated wrapper name. */
+    static function registerLambda(body:haxe.macro.Type.TypedExpr):String {
+        var n = Lambda.count(callbackRegistry) + lambdaRegistry.length;
+        var wrapperName = 'wui_cb_$n';
+        lambdaRegistry.push({name: wrapperName, body: body});
+        return wrapperName;
+    }
+
+    /** Emit a generated `wui.generated.Callbacks` class containing one
+        static wrapper per registered callback. MainWindow.cpp's click
+        handlers call into this class via its hxcpp-generated qualified
+        name (`::wui::generated::Callbacks_obj::wui_cb_<N>()`), no C
+        linkage needed. Called from `analyze()` during the typing pass
+        so hxcpp picks the class up as part of the normal compilation. */
+    static function emitCallbackModule():Void {
+        if (Lambda.count(callbackRegistry) == 0 && lambdaRegistry.length == 0) return;
+        var pos = haxe.macro.Context.currentPos();
+        var fields:Array<haxe.macro.Expr.Field> = [];
+        // Static-function callbacks.
+        for (fnPath in callbackRegistry.keys()) {
+            var wrapperName = callbackRegistry.get(fnPath);
+            var bodyExpr = haxe.macro.Context.parse('{ $fnPath(); }', pos);
+            fields.push({
+                name: wrapperName,
+                pos: pos,
+                meta: [{ name: ":keep", pos: pos }],
+                access: [APublic, AStatic],
+                kind: FFun({
+                    args: [],
+                    ret: macro :Void,
+                    expr: bodyExpr
+                })
+            });
+        }
+        // Anonymous lambdas.
+        for (entry in lambdaRegistry) {
+            fields.push({
+                name: entry.name,
+                pos: pos,
+                meta: [{ name: ":keep", pos: pos }],
+                access: [APublic, AStatic],
+                kind: FFun({
+                    args: [],
+                    ret: macro :Void,
+                    expr: haxe.macro.Context.storeTypedExpr(entry.body)
+                })
+            });
+        }
+        haxe.macro.Context.defineType({
+            pos: pos,
+            pack: ["wui", "generated"],
+            name: "Callbacks",
+            kind: TDClass(),
+            fields: fields,
+            meta: [{ name: ":keep", pos: pos }]
+        });
+        // Hand the wrapper list to UIBuilder so MainWindow.cpp can pull
+        // in the matching header.
+        var all = [for (n in callbackRegistry) n];
+        for (e in lambdaRegistry) all.push(e.name);
+        UIBuilder.exposedCallbacks = all;
+    }
+
+    /** Plausible initial text shown before the state has been pushed for the
+        first time. Used to keep the compile-time `text` property in the
+        ViewNode close to what the user sees on startup. */
+    static function stateInitialText(stateName:String):String {
+        var sf = findStateField(stateName);
+        if (sf == null) return "0";
+        return switch (sf.type) {
+            case "std::wstring": "";
+            case "bool": "false";
+            case _: "0";
+        };
     }
 
     /** Return C++ expression to convert a state variable to std::wstring. */

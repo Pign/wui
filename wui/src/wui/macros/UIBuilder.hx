@@ -43,6 +43,14 @@ class UIBuilder {
     public static var stateFields:Array<{name:String, type:String, initial:String}> = [];
 
     /**
+     * Auto-exposed Haxe callback wrapper names (see
+     * `WinUIGenerator.emitCallbackModule`). MainWindow.cpp emits
+     * one `extern "C" void <name>();` per entry so the generated
+     * click handlers can call them.
+     */
+    public static var exposedCallbacks:Array<String> = [];
+
+    /**
      * List of {stateName, textVar} pairs for state-bound text controls.
      * The generated code will subscribe to state changes and update these.
      */
@@ -87,12 +95,101 @@ namespace MainWindow {
             notifyFuncs += '    }\n';
         }
 
-        // Build state binding subscriptions
+        // Per-type dispatch functions called by `wui.state.StateBridge`
+        // from Haxe lambdas (CLW-21). Single signature regardless of
+        // how many fields exist; the body looks up by wstring name.
+        // Functions are defined OUTSIDE the MainWindow namespace so
+        // they have C linkage and a stable symbol.
+        function buildDispatch(typeName:String, cppType:String, retCppType:String, signature:String, setBody:String -> String, getBody:String -> String):String {
+            // Always emit the dispatch functions — even when no fields of
+            // this type exist — so wui.state.StateBridge always finds its
+            // C symbols at link time. Branches list is empty when no fields.
+            var typedFields = [for (sf in stateFields) if (sf.type == cppType) sf];
+            var setBranches = '    (void)name; (void)name_len;\n';
+            var getBranches = '    (void)name; (void)name_len;\n';
+            if (typedFields.length > 0) {
+                setBranches = '    std::wstring n(name, name_len);\n';
+                getBranches = '    std::wstring n(name, name_len);\n';
+                for (sf in typedFields) {
+                    setBranches += '    if (n == L"${sf.name}") { ${setBody(sf.name)} return; }\n';
+                    getBranches += '    if (n == L"${sf.name}") { ${getBody(sf.name)} return; }\n';
+                }
+            }
+            return signature
+                .split("__SET_BRANCHES__").join(setBranches)
+                .split("__GET_BRANCHES__").join(getBranches);
+        }
+
+        var dispatchCode = "} // close MainWindow ns to define extern \"C\" bridges\n";
+        // String
+        dispatchCode += buildDispatch(
+            "string", "std::wstring", "void",
+            'extern "C" void clw_state_set_string(const wchar_t* name, int name_len, const wchar_t* val, int val_len) {\n'
+            + '__SET_BRANCHES__'
+            + '}\n'
+            + 'extern "C" void clw_state_get_string(const wchar_t* name, int name_len, const wchar_t** out_buf, int* out_len) {\n'
+            + '__GET_BRANCHES__'
+            + '    *out_buf = L""; *out_len = 0;\n'
+            + '}\n',
+            function(name) return 'MainWindow::s_$name.assign(val, val_len); MainWindow::notify_$name();',
+            function(name) return '*out_buf = MainWindow::s_$name.c_str(); *out_len = (int)MainWindow::s_$name.length();'
+        );
+        // Int
+        dispatchCode += buildDispatch(
+            "int", "int", "int",
+            'extern "C" void clw_state_set_int(const wchar_t* name, int name_len, int val) {\n'
+            + '__SET_BRANCHES__'
+            + '}\n'
+            + 'extern "C" int clw_state_get_int(const wchar_t* name, int name_len) {\n'
+            + '__GET_BRANCHES__'
+            + '    return 0;\n'
+            + '}\n',
+            function(name) return 'MainWindow::s_$name = val; MainWindow::notify_$name();',
+            function(name) return 'return MainWindow::s_$name;'
+        );
+        // Float (double)
+        dispatchCode += buildDispatch(
+            "double", "double", "double",
+            'extern "C" void clw_state_set_double(const wchar_t* name, int name_len, double val) {\n'
+            + '__SET_BRANCHES__'
+            + '}\n'
+            + 'extern "C" double clw_state_get_double(const wchar_t* name, int name_len) {\n'
+            + '__GET_BRANCHES__'
+            + '    return 0.0;\n'
+            + '}\n',
+            function(name) return 'MainWindow::s_$name = val; MainWindow::notify_$name();',
+            function(name) return 'return MainWindow::s_$name;'
+        );
+        // Bool
+        dispatchCode += buildDispatch(
+            "bool", "bool", "bool",
+            'extern "C" void clw_state_set_bool(const wchar_t* name, int name_len, bool val) {\n'
+            + '__SET_BRANCHES__'
+            + '}\n'
+            + 'extern "C" bool clw_state_get_bool(const wchar_t* name, int name_len) {\n'
+            + '__GET_BRANCHES__'
+            + '    return false;\n'
+            + '}\n',
+            function(name) return 'MainWindow::s_$name = val; MainWindow::notify_$name();',
+            function(name) return 'return MainWindow::s_$name;'
+        );
+        dispatchCode += 'namespace MainWindow {\n';
+        var accessorsCode = dispatchCode;
+
+        // Build state binding subscriptions.
+        // Each listener defers its UI update via DispatcherQueue.TryEnqueue —
+        // running synchronously from inside a click handler is a known WinUI 3
+        // re-entrance pattern that crashes the XAML compositor a frame later
+        // with STOWED_EXCEPTION 0xc000027b in Microsoft.UI.Xaml.dll.
         var subscriptionLines = "";
         for (binding in stateBindings) {
             var fmt = binding.format;
             subscriptionLines += '    s_${binding.stateName}_listeners.push_back([${binding.controlVar}]() {\n';
-            subscriptionLines += '        $fmt\n';
+            subscriptionLines += '        if (wui::runtime::dispatcherQueue) {\n';
+            subscriptionLines += '            wui::runtime::dispatcherQueue.TryEnqueue([${binding.controlVar}]() {\n';
+            subscriptionLines += '                $fmt\n';
+            subscriptionLines += '            });\n';
+            subscriptionLines += '        }\n';
             subscriptionLines += '    });\n';
         }
 
@@ -103,10 +200,20 @@ namespace MainWindow {
             bodyStr += indent + line + "\n";
         }
 
+        // Auto-exposed Haxe callbacks (CLW-11). MainWindow.cpp pulls in
+        // hxcpp.h + the generated wui.generated.Callbacks header so the
+        // click handlers can call `::wui::generated::Callbacks_obj::name()`
+        // directly. The include is only emitted when at least one
+        // callback was registered, to keep simple Counter-style apps free
+        // of the hxcpp framework dependency on the WinRT side.
+        var callbacksInclude = exposedCallbacks.length > 0
+            ? '#include <hxcpp.h>\n#include <wui/generated/Callbacks.h>\n'
+            : '';
+
         var sourceContent = '#include "pch.h"
 #include "MainWindow.h"
 #include <vector>
-
+$callbacksInclude
 namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 namespace winrt_media = winrt::Microsoft::UI::Xaml::Media;
@@ -119,6 +226,7 @@ $stateDecls
 $subscriberDecls
     // ---- Notify helpers ----
 $notifyFuncs
+$accessorsCode
 winrt_xaml::UIElement BuildUI(winrt_xaml::Window const& window)
 {
     // Store dispatcher for thread-safe UI updates
