@@ -137,12 +137,16 @@ class ProjectGenerator {
       <ConformanceMode>true</ConformanceMode>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>DISABLE_XAML_GENERATED_MAIN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- Match hxcpp static_link CRT (it uses /MT release, /MTd debug).
+           Mixing /MT and /MD across the lib boundary causes LNK2038. -->
+      <RuntimeLibrary Condition="\'$(Configuration)\'==\'Debug\'">MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary Condition="\'$(Configuration)\'==\'Release\'">MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>WindowsApp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$cppDir;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>WindowsApp.lib;lib$appName.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>Microsoft.WindowsAppRuntime.Bootstrap.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
-      <!-- TODO: Add $cppDir\\lib${appName}.lib when linking hxcpp -->
     </Link>
   </ItemDefinitionGroup>
 

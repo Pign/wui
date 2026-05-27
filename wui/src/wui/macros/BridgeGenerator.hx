@@ -69,6 +69,10 @@ private:
 
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 
+// Boot the Haxe runtime (linked from libHelloworld.lib produced by hxcpp).
+// Defined in build/cpp/src/__lib__.cpp when -D static_link is set.
+extern "C" void __hxcpp_lib_main();
+
 void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
 {
     // Load WinUI control styles (enables TextBox, Slider, ToggleSwitch, etc.)
@@ -97,6 +101,11 @@ void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
 int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
     winrt::init_apartment(winrt::apartment_type::single_threaded);
+
+    // Bootstrap the Haxe runtime: hx::Boot(), __boot_all(), then call
+    // the App subclass static main(). Required for @:state fields and
+    // any Haxe class to function at runtime.
+    __hxcpp_lib_main();
 
     winrt_xaml::Application::Start(
         [](auto&&) {
