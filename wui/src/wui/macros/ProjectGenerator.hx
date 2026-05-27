@@ -60,20 +60,45 @@ class ProjectGenerator {
         return v;
     }
 
+    /** Resolve the hxcpp library include directory by shelling out to
+        `haxelib path hxcpp`. Needed by the .vcxproj so MainWindow.cpp
+        can `#include <wui/generated/Callbacks.h>` and reach into the
+        hxcpp-generated Haxe classes for click-handler bridges. */
+    static function readHxcppIncludePath():String {
+        var p:sys.io.Process = null;
+        try {
+            p = new sys.io.Process("haxelib", ["path", "hxcpp"]);
+            var firstLine = StringTools.trim(p.stdout.readLine());
+            p.close();
+            // haxelib path emits the lib dir with a trailing slash on the
+            // first line, then "-D hxcpp=<version>" on the next.
+            if (firstLine.length > 0) {
+                if (!StringTools.endsWith(firstLine, "/") && !StringTools.endsWith(firstLine, "\\")) {
+                    firstLine += "/";
+                }
+                return firstLine + "include";
+            }
+        } catch (e:Dynamic) {
+            if (p != null) try p.close() catch (_:Dynamic) {};
+        }
+        return "";
+    }
+
     public static function generate(appName:String, outputDir:String):Void {
         if (!FileSystem.exists(outputDir)) {
             FileSystem.createDirectory(outputDir);
         }
 
         var sdkVersion = readSdkVersion();
+        var hxcppInclude = readHxcppIncludePath();
 
-        generateVcxproj(appName, outputDir, sdkVersion);
+        generateVcxproj(appName, outputDir, sdkVersion, hxcppInclude);
         generatePackagesConfig(outputDir, sdkVersion);
         generatePch(outputDir);
         generateAppManifest(appName, outputDir);
     }
 
-    static function generateVcxproj(appName:String, outputDir:String, sdkVersion:String):Void {
+    static function generateVcxproj(appName:String, outputDir:String, sdkVersion:String, hxcppInclude:String):Void {
         // Paths relative to the .vcxproj location (build/winui/)
         var cppDir = "..\\cpp";
         var packagesDir = "..\\packages";
@@ -132,15 +157,24 @@ class ProjectGenerator {
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$cppDir\\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$cppDir\\include;$hxcppInclude;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>DISABLE_XAML_GENERATED_MAIN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- DISABLE_XAML_GENERATED_MAIN: we ship our own wWinMain.
+           HX_*/HXCPP_*: hxcpp framework headers gate platform code on
+           these. MainWindow.cpp includes <hxcpp.h> + the generated
+           Callbacks header when StateAction.Custom callbacks are used. -->
+      <PreprocessorDefinitions>DISABLE_XAML_GENERATED_MAIN;HX_WINDOWS;HXCPP_M64;HXCPP_API_LEVEL=430;HX_SMART_STRINGS;HXCPP_VISIT_ALLOCS;STATIC_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- Match hxcpp static_link CRT (it uses /MT release, /MTd debug).
            Mixing /MT and /MD across the lib boundary causes LNK2038. -->
       <RuntimeLibrary Condition="\'$(Configuration)\'==\'Debug\'">MultiThreadedDebug</RuntimeLibrary>
       <RuntimeLibrary Condition="\'$(Configuration)\'==\'Release\'">MultiThreaded</RuntimeLibrary>
+      <!-- Force UTF-8 source encoding. Without /utf-8, MSVC reads the
+           generated .cpp files as the system code page (CP-1252 on FR
+           Windows) and L"..." literals containing non-ASCII chars get
+           reinterpreted byte-per-byte as wide chars, producing mojibake. -->
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
