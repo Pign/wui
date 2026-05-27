@@ -70,6 +70,8 @@ class Init {
 --macro wui.macros.WinUIGenerator.register()
 -main $className
 -cpp build/cpp
+-D static_link
+-D HXCPP_M64
 ';
     }
 
