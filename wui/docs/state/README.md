@@ -153,10 +153,14 @@ new Button("Login", null, StateAction.Custom(() -> {
 }))
 ```
 
-The lambda body is lifted into a static wrapper in `wui.generated.Callbacks` via `Context.storeTypedExpr`. Captures of *local variables* are not supported (the static lift loses the closure scope). To pass data into the lambda's body, either:
+The lambda body is lifted into a static wrapper in `wui.generated.Callbacks` via `Context.storeTypedExpr`. This is important because **`body()` itself never runs at runtime** — the macro consumes the typed AST at compile time and emits all the WinUI 3 code from it. So the lambda has no enclosing runtime scope to capture from:
 
-- Reference module-level statics / class statics (visible to the lifted body), or
-- Read state via `wui.state.StateBridge.getX(name)`.
+- `this.X` references would point at an instance that's never instantiated → not supported.
+- Locals declared in `body()` don't exist at runtime → not supported.
+- **Module-level statics** and **other class statics** are fine (resolved by name into the static wrapper).
+- **State** is read/written via `wui.state.StateBridge.{get,set}{String,Int,Float,Bool}(name)` — works from the lifted lambda just like from anywhere else.
+
+This makes lambdas in `Custom` more like *static methods spelled inline* than true closures. For an interim spike where you'd really want a runtime-built closure with capture-by-reference (and writebacks), the lift pattern doesn't help yet — track that as a follow-up if you hit it.
 
 > See [#threading-caveat](#threading-caveat) before passing data into worker threads.
 
@@ -200,24 +204,35 @@ Unknown names are silently ignored on `set` and return type defaults on `get`.
 
 ### Threading caveat
 
-`Sys.println`, `haxe.Http`, and `StateBridge` all work fine on a `sys.thread.Thread.create` worker. But **passing data through a closure capture or a Haxe class static into the worker comes back as garbage** on hxcpp 4.3 — you'll see a single character + NUL truncation. Use `sys.thread.Deque<T>` or `sys.thread.Mutex` to synchronize:
+`Sys.println`, `haxe.Http`, and `StateBridge` all work fine on a `sys.thread.Thread.create` worker.
+
+But **passing Haxe heap objects through a closure capture, a static field, or even `sys.thread.Deque` into the worker** is non-deterministic on hxcpp 4.3 — sometimes the value arrives intact, sometimes you see a one-character + NUL truncation, sometimes pure garbage. The Deque storage is GC-aware (extends `Array_obj<Dynamic>` with a proper `__Visit`), so the issue isn't simply a missing root — investigation in progress.
+
+The robust pattern is to **avoid crossing the thread boundary with Haxe objects entirely**: have the worker call back into the C++ side via `StateBridge.getX` for any state it needs.
 
 ```haxe
-static var _q:sys.thread.Deque<String> = new sys.thread.Deque<String>();
-
 public static function startLogin():Void {
-    var server = StateBridge.getString("serverUrl");
-    _q.add(server);
+    StateBridge.setString("loginStatus", "Démarrage…");
     sys.thread.Thread.create(_runWorker);
 }
 
 static function _runWorker():Void {
-    var server = _q.pop(true);
-    // server is intact here
+    // Worker reads serverUrl directly from the C++ static via the
+    // dispatch — no Haxe heap object crosses the boundary.
+    var server = StateBridge.getString("serverUrl");
+    // … network IO, then StateBridge.setString to publish results.
 }
 ```
 
-A proper fix in hxcpp/wui is tracked separately.
+This sidesteps the bug for the common "worker needs to know app state" case. A proper hxcpp-level fix is tracked separately.
+
+### Lambda capture limitations summary
+
+| Pattern | Captures work? |
+| --- | --- |
+| Closure built and called on the same thread, in a normal runtime function | ✅ |
+| Closure passed to `Thread.create` | ❌ — flaky, see above |
+| Lambda passed to `StateAction.Custom(() -> {...})` inside `body()` | ❌ — `body()` is compile-time only; the lifted lambda has no closure scope |
 
 ---
 
