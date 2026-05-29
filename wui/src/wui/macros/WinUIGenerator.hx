@@ -82,6 +82,8 @@ class WinUIGenerator {
     static var cachedDisplayName:String;
     static var cachedWindowWidth:Int;
     static var cachedWindowHeight:Int;
+    static var cachedBackdrop:String;
+    static var cachedTitleBarTree:ViewNode;
 
     /** Analyse the first collected App subclass: extract names, state
         fields, body() ViewNode tree, and (critically) emit the
@@ -93,8 +95,11 @@ class WinUIGenerator {
         cachedDisplayName = getDisplayName(appType);
         cachedWindowWidth = getWindowWidth(appType);
         cachedWindowHeight = getWindowHeight(appType);
+        cachedBackdrop = getBackdrop(appType);
         UIBuilder.stateFields = collectStateFields(appType);
         cachedViewTree = buildViewTree(appType);
+        cachedTitleBarTree = buildTitleBarTree(appType);
+        collectEffects(appType);
         emitCallbackModule();
         // Note: state read/write from Haxe lambdas goes through the
         // stable `wui.state.StateBridge` class in the wui lib. The
@@ -189,10 +194,10 @@ class WinUIGenerator {
         ProjectGenerator.generate(cachedAppName, winuiDir);
         Sys.println("[wui]   Generated .vcxproj, packages.config, pch.h");
 
-        BridgeGenerator.generate(cachedAppName, cachedDisplayName, winuiDir, cachedWindowWidth, cachedWindowHeight);
+        BridgeGenerator.generate(cachedAppName, cachedDisplayName, winuiDir, cachedWindowWidth, cachedWindowHeight, cachedBackdrop, cachedTitleBarTree != null);
         Sys.println("[wui]   Generated App.h, App.cpp, WuiRuntime.h");
 
-        UIBuilder.generateMainWindow(cachedViewTree, winuiDir);
+        UIBuilder.generateMainWindow(cachedViewTree, cachedTitleBarTree, winuiDir);
         Sys.println("[wui]   Generated MainWindow.h, MainWindow.cpp");
 
         Sys.println('[wui] C++/WinRT project generated at: $winuiDir');
@@ -310,6 +315,52 @@ class WinUIGenerator {
         }
     }
 
+    /**
+     * Window backdrop material. Read from the `backdrop():Backdrop`
+     * override if the body is a single `return EnumCtor;`, else falls
+     * back to "Mica" (the App.backdrop default — see wui.App.hx).
+     *
+     * Returned as the bare constructor name ("Mica", "MicaAlt",
+     * "Acrylic", "None") so BridgeGenerator can switch on it without
+     * pulling the Backdrop enum into the macro caller.
+     */
+    static function getBackdrop(type:Type):String {
+        switch (type) {
+            case TInst(ref, _):
+                var cls = ref.get();
+                for (field in cls.fields.get()) {
+                    if (field.name == "backdrop") {
+                        if (field.expr() != null) {
+                            var name = extractEnumReturn(field.expr());
+                            if (name != null && name != "") return name;
+                        }
+                    }
+                }
+            default:
+        }
+        return "Mica";
+    }
+
+    /** Walk a typed function body looking for a `return EnumCtor;` and
+        return the constructor name. Mirrors `extractStringReturn` for
+        nullary enum constructors (Mica, MicaAlt, Acrylic, None). */
+    static function extractEnumReturn(texpr:TypedExpr):String {
+        if (texpr == null) return null;
+        switch (texpr.expr) {
+            case TReturn(e):
+                return extractEnumName(e);
+            case TBlock(exprs):
+                for (e in exprs) {
+                    var s = extractEnumReturn(e);
+                    if (s != null) return s;
+                }
+            case TFunction(tf):
+                return extractEnumReturn(tf.expr);
+            default:
+        }
+        return null;
+    }
+
     static function getWindowWidth(type:Type):Int {
         return getIntField(type, "windowWidth", 800);
     }
@@ -333,6 +384,237 @@ class WinUIGenerator {
             default:
         }
         return defaultVal;
+    }
+
+    /**
+     * Build a ViewNode tree from the `titleBar()` override, if one exists
+     * AND its body actually returns a non-null View. Returns null
+     * otherwise so codegen skips the BuildTitleBar function and the
+     * system title bar stays in place.
+     *
+     * `cls.fields.get()` only lists own fields, so an unoverridden
+     * `titleBar()` doesn't show up here — `null` is the natural answer.
+     * When the user *does* override but still returns the literal `null`
+     * (e.g. behind a runtime check), `returnsLiteralNull()` catches it
+     * before `analyzeBodyExpr` falls through to its "Hello from WUI!"
+     * defaultNode().
+     */
+    static function buildTitleBarTree(type:Type):ViewNode {
+        switch (type) {
+            case TInst(ref, _):
+                var cls = ref.get();
+                for (field in cls.fields.get()) {
+                    if (field.name == "titleBar") {
+                        if (field.expr() == null) return null;
+                        if (returnsLiteralNull(field.expr())) return null;
+                        return analyzeBodyExpr(field.expr());
+                    }
+                }
+            default:
+        }
+        return null;
+    }
+
+    /** True iff the body is `{ return null; }` (or wraps to that after
+        block/function unwrapping). Used to filter out the App.titleBar()
+        no-op default before codegen runs. */
+    static function returnsLiteralNull(texpr:TypedExpr):Bool {
+        if (texpr == null) return false;
+        switch (texpr.expr) {
+            case TReturn(e):
+                if (e == null) return true;
+                switch (e.expr) {
+                    case TConst(TNull): return true;
+                    default: return false;
+                }
+            case TBlock(exprs):
+                for (e in exprs) if (returnsLiteralNull(e)) return true;
+            case TFunction(tf):
+                return returnsLiteralNull(tf.expr);
+            default:
+        }
+        return false;
+    }
+
+    /**
+     * Scan `static function main()` for `wui.Effect.run(fn, [...deps])`
+     * call sites. Each one lifts its lambda body into the Callbacks
+     * module (reusing the click-handler infrastructure) and records the
+     * dep list so UIBuilder can wire matching `s_<dep>_listeners`
+     * subscriptions in BuildUI.
+     *
+     * Constraints surfaced via warnings (not hard errors — the macro
+     * stays as friendly as possible during iteration):
+     *  - The deps argument must be an inline array literal of string
+     *    constants (`["unreadCount"]`), not a variable.
+     *  - Each dep must match a declared `@:state` field.
+     */
+    static function collectEffects(type:Type):Void {
+        UIBuilder.effects = [];
+        switch (type) {
+            case TInst(ref, _):
+                var cls = ref.get();
+                // Instance `effects():Void` override is the canonical
+                // place — typed @:state refs are in scope there.
+                for (f in cls.fields.get()) {
+                    if (f.name == "effects" && f.expr() != null) {
+                        scanForEffectCalls(f.expr());
+                    }
+                }
+                // Legacy / escape-hatch: also scan static `main()` so
+                // the old string-key form keeps working without forcing
+                // users to migrate every effect at once.
+                for (sf in cls.statics.get()) {
+                    if (sf.name == "main" && sf.expr() != null) {
+                        scanForEffectCalls(sf.expr());
+                    }
+                }
+            default:
+        }
+    }
+
+    static function scanForEffectCalls(texpr:TypedExpr):Void {
+        if (texpr == null) return;
+        switch (texpr.expr) {
+            case TCall(callee, args):
+                if (isEffectRunCall(callee) && args.length >= 2) {
+                    registerEffectCall(args[0], args[1]);
+                }
+                scanForEffectCalls(callee);
+                for (a in args) scanForEffectCalls(a);
+            case TBlock(exprs):
+                for (e in exprs) scanForEffectCalls(e);
+            case TIf(c, t, e):
+                scanForEffectCalls(c); scanForEffectCalls(t);
+                if (e != null) scanForEffectCalls(e);
+            case TWhile(c, b, _):
+                scanForEffectCalls(c); scanForEffectCalls(b);
+            case TTry(e, catches):
+                scanForEffectCalls(e);
+                for (c in catches) scanForEffectCalls(c.expr);
+            case TReturn(e):
+                if (e != null) scanForEffectCalls(e);
+            case TVar(_, e):
+                if (e != null) scanForEffectCalls(e);
+            case TBinop(_, l, r):
+                scanForEffectCalls(l); scanForEffectCalls(r);
+            case TUnop(_, _, e):
+                scanForEffectCalls(e);
+            case TParenthesis(e):
+                scanForEffectCalls(e);
+            case TMeta(_, e):
+                scanForEffectCalls(e);
+            case TCast(e, _):
+                scanForEffectCalls(e);
+            case TFunction(tf):
+                scanForEffectCalls(tf.expr);
+            default:
+        }
+    }
+
+    static function isEffectRunCall(callee:TypedExpr):Bool {
+        if (callee == null) return false;
+        switch (callee.expr) {
+            case TField(_, fa):
+                switch (fa) {
+                    case FStatic(clsRef, cf):
+                        var cls = clsRef.get();
+                        var pack = cls.pack.join(".");
+                        var path = (pack.length > 0 ? pack + "." : "") + cls.name;
+                        return path == "wui.Effect" && cf.get().name == "run";
+                    default: return false;
+                }
+            default: return false;
+        }
+    }
+
+    /** Extract a `@:state` field name from a single deps-array entry.
+        Accepts a string literal (legacy form) or a typed field access
+        — `this.searchQuery` or implicit `searchQuery` from instance
+        scope — provided the field is actually @:state-tagged. Returns
+        `null` when neither shape matches. */
+    static function extractDepName(item:TypedExpr):String {
+        if (item == null) return null;
+        switch (item.expr) {
+            case TConst(TString(s)):
+                return s;
+            case TField(_, fa):
+                var fieldName = switch (fa) {
+                    case FInstance(_, _, cfRef): cfRef.get().name;
+                    case FStatic(_, cfRef): cfRef.get().name;
+                    case FDynamic(s): s;
+                    default: null;
+                };
+                if (fieldName == null) return null;
+                for (sf in UIBuilder.stateFields) {
+                    if (sf.name == fieldName) return fieldName;
+                }
+                return null;
+            case TParenthesis(e):
+                return extractDepName(e);
+            case TCast(e, _):
+                return extractDepName(e);
+            default:
+                return null;
+        }
+    }
+
+    static function registerEffectCall(lambdaExpr:TypedExpr, depsExpr:TypedExpr):Void {
+        // Lift the lambda body. The user always writes
+        // `() -> { ... }` so the typed shape is TFunction(tf); we hand
+        // `tf.expr` (the body block) to registerLambda the same way
+        // StateAction.Custom(...) does for click handlers.
+        var body:TypedExpr = null;
+        switch (lambdaExpr.expr) {
+            case TFunction(tf):
+                body = tf.expr;
+            default:
+                haxe.macro.Context.warning(
+                    "wui.Effect.run: first argument must be a lambda literal `() -> { ... }`.",
+                    lambdaExpr.pos);
+                return;
+        }
+        if (body == null) return;
+        var wrapperName = registerLambda(body);
+
+        // Walk the deps array literal. Each entry is either:
+        //   - a string literal (escape hatch for static contexts)
+        //   - a typed `@:state` field reference (e.g. `searchQuery`),
+        //     reachable from instance methods like `effects()`. We pull
+        //     the field name straight off the typed AST so the binding
+        //     survives Haxe-level renames.
+        var deps:Array<String> = [];
+        switch (depsExpr.expr) {
+            case TArrayDecl(items):
+                for (item in items) {
+                    var name = extractDepName(item);
+                    if (name != null) {
+                        deps.push(name);
+                    } else {
+                        haxe.macro.Context.warning(
+                            "wui.Effect.run: deps array entries must be string literals or @:state field references.",
+                            item.pos);
+                    }
+                }
+            default:
+                haxe.macro.Context.warning(
+                    "wui.Effect.run: deps must be an inline array literal — `[searchQuery]` or `[\"searchQuery\"]`.",
+                    depsExpr.pos);
+        }
+
+        // Cross-check each dep names an actual @:state field — typos
+        // here would silently never fire otherwise.
+        for (d in deps) {
+            var found = false;
+            for (sf in UIBuilder.stateFields) if (sf.name == d) { found = true; break; }
+            if (!found) {
+                haxe.macro.Context.warning(
+                    'wui.Effect.run: dep "$d" does not match any @:state field. The effect will run once but never re-run.',
+                    depsExpr.pos);
+            }
+        }
+
+        UIBuilder.effects.push({ wrapperName: wrapperName, deps: deps });
     }
 
     /**
@@ -634,11 +916,11 @@ class WinUIGenerator {
             case "italic":
                 { type: "Italic", values: [] };
             case "foregroundColor":
-                var color = args.length > 0 ? extractEnumName(args[0]) : "Black";
-                { type: "ForegroundColor", values: [color] };
+                var vals = args.length > 0 ? extractColorValues(args[0]) : ["Black"];
+                { type: "ForegroundColor", values: vals };
             case "background":
-                var color = args.length > 0 ? extractEnumName(args[0]) : "White";
-                { type: "Background", values: [color] };
+                var vals = args.length > 0 ? extractColorValues(args[0]) : ["White"];
+                { type: "Background", values: vals };
             case "opacity":
                 var value = args.length > 0 ? extractFloatValue(args[0]) : 1.0;
                 { type: "Opacity", values: [value] };
@@ -670,8 +952,8 @@ class WinUIGenerator {
                 var text = args.length > 0 ? extractStringOrExpr(args[0]) : "";
                 { type: "ToolTip", values: [text] };
             case "borderBrush":
-                var color = args.length > 0 ? extractEnumName(args[0]) : "Gray";
-                { type: "BorderBrush", values: [color] };
+                var vals = args.length > 0 ? extractColorValues(args[0]) : ["Gray"];
+                { type: "BorderBrush", values: vals };
             case "borderThickness":
                 var t = args.length > 0 ? extractFloatValue(args[0]) : 1.0;
                 { type: "BorderThickness", values: [t] };
@@ -765,6 +1047,41 @@ class WinUIGenerator {
                 return b;
             default:
                 return true;
+        }
+    }
+
+    /**
+     * Extract a ColorValue enum into a flat [constructorName, ...args] array.
+     * Handles both nullary constructors (Gray → ["Gray"]) and parametric
+     * ones (Rgb(186, 195, 255) → ["Rgb", 186, 195, 255]).
+     *
+     * For parametric constructors the typed AST wraps the field access in
+     * a TCall — extractEnumName() only looked at TField, so anything with
+     * args silently fell through to the empty string and downstream
+     * generateColorBrush() returned grayBrush() for every custom colour.
+     */
+    static function extractColorValues(expr:TypedExpr):Array<Dynamic> {
+        if (expr == null) return [];
+        switch (expr.expr) {
+            case TCall(callee, args):
+                var name = extractEnumName(callee);
+                var out:Array<Dynamic> = [name];
+                for (a in args) {
+                    switch (a.expr) {
+                        case TConst(TInt(i)): out.push(i);
+                        case TConst(TFloat(s)): out.push(Std.parseFloat(s));
+                        case TConst(TString(s)): out.push(s);
+                        case TConst(TBool(b)): out.push(b);
+                        default: out.push(null);
+                    }
+                }
+                return out;
+            case TField(_, _):
+                return [extractEnumName(expr)];
+            case TConst(TString(s)):
+                return [s];
+            default:
+                return [];
         }
     }
 

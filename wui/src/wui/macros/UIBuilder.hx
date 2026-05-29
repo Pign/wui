@@ -51,19 +51,78 @@ class UIBuilder {
     public static var exposedCallbacks:Array<String> = [];
 
     /**
+     * `wui.Effect.run(fn, [deps])` registrations harvested by
+     * `WinUIGenerator.collectEffects`. Each entry's `wrapperName` is
+     * already in `exposedCallbacks` (registered via `registerLambda`);
+     * `deps` are the @:state field names whose listener lists must call
+     * the wrapper. Emitted in `BuildUI`, after view bindings.
+     */
+    public static var effects:Array<{wrapperName:String, deps:Array<String>}> = [];
+
+    /**
+     * Variable names of focusable / clickable controls created during
+     * the current Build pass. Populated by `generateNode` whenever it
+     * emits a TextBox, Button, ComboBox, Slider, ToggleSwitch, or
+     * CheckBox.
+     *
+     * Used by `BuildTitleBar` only: WinUI 3 1.5 treats the entire
+     * `SetTitleBar()` element as a drag region and does NOT reliably
+     * passthrough pointer input to interactive children (especially
+     * TextBox). `InputNonClientPointerSource.SetRegionRects(Passthrough)`
+     * is the documented workaround — codegen registers each tracked
+     * control's bounds on Loaded/SizeChanged so a click on a search
+     * field actually focuses it.
+     */
+    public static var interactiveVars:Array<String> = [];
+
+    /**
      * List of {stateName, textVar} pairs for state-bound text controls.
      * The generated code will subscribe to state changes and update these.
      */
     static var stateBindings:Array<{stateName:String, controlVar:String, format:String}> = [];
 
-    public static function generateMainWindow(viewTree:ViewNode, outputDir:String):Void {
+    public static function generateMainWindow(viewTree:ViewNode, titleBarTree:ViewNode, outputDir:String):Void {
         reset();
         stateBindings = [];
 
+        // Generate body() tree first, snapshot its bindings so titleBar()'s
+        // bindings can be split off into their own BuildTitleBar function.
         var bodyLines:Array<String> = [];
         var rootVar = generateNode(viewTree, bodyLines, 1);
+        var bodyBindings = stateBindings.copy();
+
+        // Body comes first; interactive controls tracked there are
+        // discarded — passthrough region magic only matters for the
+        // title bar element.
+        interactiveVars = [];
+
+        // titleBar() — optional, only emit if the user actually overrode it.
+        // Variable counter keeps incrementing so widget names never collide
+        // even though the two trees live in separate Build functions.
+        var hasTitleBar = titleBarTree != null;
+        var titleBarLines:Array<String> = [];
+        var titleBarRootVar:String = null;
+        var titleBarBindings:Array<{stateName:String, controlVar:String, format:String}> = [];
+        var titleBarInteractive:Array<String> = [];
+        if (hasTitleBar) {
+            stateBindings = [];
+            interactiveVars = [];
+            titleBarRootVar = generateNode(titleBarTree, titleBarLines, 1);
+            titleBarBindings = stateBindings.copy();
+            titleBarInteractive = interactiveVars.copy();
+            // Reserve ~138px on the right so the system caption buttons
+            // (min/max/close) don't sit on top of user widgets. Preserved
+            // user-set margin on left/top/bottom; right is enforced to a
+            // minimum so a tall design can still grow it.
+            titleBarLines.push('auto _tbm = $titleBarRootVar.Margin();');
+            titleBarLines.push('if (_tbm.Right < 145.0) _tbm.Right = 145.0;');
+            titleBarLines.push('$titleBarRootVar.Margin(_tbm);');
+        }
 
         // Generate MainWindow.h
+        var titleBarDecl = hasTitleBar
+            ? '\n    winrt::Microsoft::UI::Xaml::UIElement BuildTitleBar(\n        winrt::Microsoft::UI::Xaml::Window const& window);\n'
+            : '';
         var headerContent = '#pragma once
 #include "pch.h"
 #include <functional>
@@ -71,7 +130,7 @@ class UIBuilder {
 namespace MainWindow {
     winrt::Microsoft::UI::Xaml::UIElement BuildUI(
         winrt::Microsoft::UI::Xaml::Window const& window);
-}
+$titleBarDecl}
 ';
         ProjectGenerator.writeIfChanged(Path.join([outputDir, "MainWindow.h"]), headerContent);
 
@@ -181,16 +240,44 @@ namespace MainWindow {
         // running synchronously from inside a click handler is a known WinUI 3
         // re-entrance pattern that crashes the XAML compositor a frame later
         // with STOWED_EXCEPTION 0xc000027b in Microsoft.UI.Xaml.dll.
-        var subscriptionLines = "";
-        for (binding in stateBindings) {
-            var fmt = binding.format;
-            subscriptionLines += '    s_${binding.stateName}_listeners.push_back([${binding.controlVar}]() {\n';
-            subscriptionLines += '        if (wui::runtime::dispatcherQueue) {\n';
-            subscriptionLines += '            wui::runtime::dispatcherQueue.TryEnqueue([${binding.controlVar}]() {\n';
-            subscriptionLines += '                $fmt\n';
-            subscriptionLines += '            });\n';
-            subscriptionLines += '        }\n';
-            subscriptionLines += '    });\n';
+        function emitSubscriptions(bindings:Array<{stateName:String, controlVar:String, format:String}>):String {
+            var s = "";
+            for (binding in bindings) {
+                var fmt = binding.format;
+                s += '    s_${binding.stateName}_listeners.push_back([${binding.controlVar}]() {\n';
+                s += '        if (wui::runtime::dispatcherQueue) {\n';
+                s += '            wui::runtime::dispatcherQueue.TryEnqueue([${binding.controlVar}]() {\n';
+                s += '                $fmt\n';
+                s += '            });\n';
+                s += '        }\n';
+                s += '    });\n';
+            }
+            return s;
+        }
+        var subscriptionLines = emitSubscriptions(bodyBindings);
+        var titleBarSubscriptionLines = emitSubscriptions(titleBarBindings);
+
+        // ---- wui.Effect.run wiring -----------------------------------
+        // For each effect harvested by WinUIGenerator.collectEffects:
+        //   1. invoke the lifted wrapper once at startup (matches React
+        //      `useEffect(fn, [deps])` semantics)
+        //   2. subscribe the SAME wrapper to each dep's listener list,
+        //      dispatched through DispatcherQueue so we share the same
+        //      re-entrance protection as view bindings.
+        var effectsLines = "";
+        if (effects.length > 0) {
+            for (eff in effects) {
+                effectsLines += '    ::wui::generated::Callbacks_obj::${eff.wrapperName}();\n';
+                for (d in eff.deps) {
+                    effectsLines += '    s_${d}_listeners.push_back([]() {\n';
+                    effectsLines += '        if (wui::runtime::dispatcherQueue) {\n';
+                    effectsLines += '            wui::runtime::dispatcherQueue.TryEnqueue([]() {\n';
+                    effectsLines += '                ::wui::generated::Callbacks_obj::${eff.wrapperName}();\n';
+                    effectsLines += '            });\n';
+                    effectsLines += '        }\n';
+                    effectsLines += '    });\n';
+                }
+            }
         }
 
         // Generate MainWindow.cpp
@@ -198,6 +285,10 @@ namespace MainWindow {
         var bodyStr = "";
         for (line in bodyLines) {
             bodyStr += indent + line + "\n";
+        }
+        var titleBarStr = "";
+        for (line in titleBarLines) {
+            titleBarStr += indent + line + "\n";
         }
 
         // Auto-exposed Haxe callbacks (CLW-11). MainWindow.cpp pulls in
@@ -210,10 +301,18 @@ namespace MainWindow {
             ? '#include <hxcpp.h>\n#include <wui/generated/Callbacks.h>\n'
             : '';
 
+        // Title-bar passthrough needs `InputNonClientPointerSource` from
+        // the Microsoft.UI.Input WinRT projection. Only emitted when the
+        // user actually overrode `titleBar()` so simple-form apps stay
+        // lean.
+        var titleBarInputInclude = hasTitleBar
+            ? '#include <winrt/Microsoft.UI.Input.h>\n#include <winrt/Windows.Graphics.h>\n'
+            : '';
+
         var sourceContent = '#include "pch.h"
 #include "MainWindow.h"
 #include <vector>
-$callbacksInclude
+$callbacksInclude$titleBarInputInclude
 namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 namespace winrt_media = winrt::Microsoft::UI::Xaml::Media;
@@ -235,9 +334,27 @@ winrt_xaml::UIElement BuildUI(winrt_xaml::Window const& window)
 $bodyStr
     // ---- State bindings ----
 $subscriptionLines
+    // ---- Effects (wui.Effect.run) ----
+$effectsLines
     return $rootVar;
 }
-
+${hasTitleBar ? '
+winrt_xaml::UIElement BuildTitleBar(winrt_xaml::Window const& window)
+{
+$titleBarStr
+    // ---- State bindings ----
+$titleBarSubscriptionLines
+    // ---- Title bar input passthrough ----
+    // WinUI 3 1.5 marks the entire SetTitleBar element as drag and does
+    // not reliably forward pointer input to interactive children
+    // (especially TextBox — Tab still works, mouse click does not focus).
+    // Register each interactive child as a passthrough region via
+    // InputNonClientPointerSource, recomputed on Loaded/SizeChanged so
+    // the rectangles track DPI changes and layout shifts.
+${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
+    return $titleBarRootVar;
+}
+' : ''}
 } // namespace MainWindow
 ';
         ProjectGenerator.writeIfChanged(Path.join([outputDir, "MainWindow.cpp"]), sourceContent);
@@ -247,7 +364,70 @@ $subscriptionLines
      * Generate C++/WinRT code for a single view node and its children.
      * Returns the variable name of the generated control.
      */
+    /**
+     * Emit the Loaded/SizeChanged wiring that registers every tracked
+     * interactive child as a passthrough region with
+     * `InputNonClientPointerSource`. Bounds are recomputed each time the
+     * layout changes (resize, DPI shift) so a click on a moved widget
+     * still focuses it.
+     *
+     * Coordinates: `TransformToVisual(nullptr)` returns DIPs relative to
+     * the window; `SetRegionRects` wants physical pixels, so we multiply
+     * by `XamlRoot.RasterizationScale`.
+     */
+    static function emitTitleBarPassthrough(rootVar:String, interactive:Array<String>):String {
+        if (interactive.length == 0) return "";
+        var buf = new StringBuf();
+        var addRectLines = "";
+        for (v in interactive) {
+            addRectLines += '            addRect($v);\n';
+        }
+        var captures = '$rootVar, window';
+        for (v in interactive) captures += ', $v';
+        buf.add('    auto _refreshPassthrough = [$captures]() {\n');
+        buf.add('        if (!window.AppWindow()) return;\n');
+        buf.add('        auto _src = winrt::Microsoft::UI::Input::InputNonClientPointerSource::GetForWindowId(\n');
+        buf.add('            window.AppWindow().Id());\n');
+        buf.add('        double _scale = $rootVar.XamlRoot() ? $rootVar.XamlRoot().RasterizationScale() : 1.0;\n');
+        buf.add('        std::vector<winrt::Windows::Graphics::RectInt32> _rects;\n');
+        buf.add('        auto addRect = [&](winrt::Microsoft::UI::Xaml::FrameworkElement child) {\n');
+        buf.add('            if (!child) return;\n');
+        buf.add('            auto _tx = child.TransformToVisual(nullptr);\n');
+        buf.add('            auto _r = _tx.TransformBounds({0, 0, (float)child.ActualWidth(), (float)child.ActualHeight()});\n');
+        buf.add('            _rects.push_back(winrt::Windows::Graphics::RectInt32{\n');
+        buf.add('                (int32_t)(_r.X * _scale), (int32_t)(_r.Y * _scale),\n');
+        buf.add('                (int32_t)(_r.Width * _scale), (int32_t)(_r.Height * _scale)\n');
+        buf.add('            });\n');
+        buf.add('        };\n');
+        buf.add(addRectLines);
+        buf.add('        _src.SetRegionRects(\n');
+        buf.add('            winrt::Microsoft::UI::Input::NonClientRegionKind::Passthrough,\n');
+        buf.add('            _rects);\n');
+        buf.add('    };\n');
+        buf.add('    $rootVar.Loaded([_refreshPassthrough](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {\n');
+        buf.add('        _refreshPassthrough();\n');
+        buf.add('    });\n');
+        buf.add('    $rootVar.SizeChanged([_refreshPassthrough](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::SizeChangedEventArgs const&) {\n');
+        buf.add('        _refreshPassthrough();\n');
+        buf.add('    });\n');
+        return buf.toString();
+    }
+
     static function generateNode(node:ViewNode, lines:Array<String>, depth:Int):String {
+        var varName = generateNodeImpl(node, lines, depth);
+        // Track interactive controls for title-bar passthrough — see
+        // `interactiveVars` doc. Filter is intentionally narrow: only
+        // widgets where a mis-routed pointer click is a real UX bug.
+        switch (node.viewType) {
+            case "TextBox" | "Button" | "ComboBox" | "Slider"
+               | "ToggleSwitch" | "CheckBox":
+                interactiveVars.push(varName);
+            default:
+        }
+        return varName;
+    }
+
+    static function generateNodeImpl(node:ViewNode, lines:Array<String>, depth:Int):String {
         return switch (node.viewType) {
             case "StackPanel": generateStackPanel(node, lines, depth);
             case "Grid": generateGrid(node, lines, depth);
@@ -631,11 +811,11 @@ $subscriptionLines
                     var align = mod.values[0];
                     lines.push('$varName.VerticalAlignment(winrt_xaml::VerticalAlignment::$align);');
                 case "Background":
-                    var colorCode = generateColorBrush(mod.values[0]);
+                    var colorCode = generateColorBrush(mod.values);
                     lines.push('$varName.Background($colorCode);');
                 case "ForegroundColor":
                     if (controlType == "TextBlock") {
-                        var colorCode = generateColorBrush(mod.values[0]);
+                        var colorCode = generateColorBrush(mod.values);
                         lines.push('$varName.Foreground($colorCode);');
                     }
                 case "Font":
@@ -666,7 +846,7 @@ $subscriptionLines
                     var escaped = escapeWideString(Std.string(mod.values[0]));
                     lines.push('winrt_controls::ToolTipService::SetToolTip($varName, winrt::box_value(L"$escaped"));');
                 case "BorderBrush":
-                    var colorCode = generateColorBrush(mod.values[0]);
+                    var colorCode = generateColorBrush(mod.values);
                     lines.push('$varName.BorderBrush($colorCode);');
                 case "BorderThickness":
                     lines.push('$varName.BorderThickness(wui::runtime::uniformThickness(${mod.values[0]}));');
@@ -714,26 +894,93 @@ $subscriptionLines
         }
     }
 
-    static function generateColorBrush(colorSpec:String):String {
-        return switch (colorSpec) {
-            case "Black": "wui::runtime::blackBrush()";
-            case "White": "wui::runtime::whiteBrush()";
-            case "Red": "wui::runtime::redBrush()";
-            case "Green": "wui::runtime::greenBrush()";
-            case "Blue": "wui::runtime::blueBrush()";
-            case "Yellow": "wui::runtime::yellowBrush()";
-            case "Orange": "wui::runtime::orangeBrush()";
-            case "Purple": "wui::runtime::purpleBrush()";
-            case "Gray": "wui::runtime::grayBrush()";
-            case "Transparent": "wui::runtime::transparentBrush()";
-            // System accent colors — use Application.Current().Resources() lookup
-            case "AccentColor": "wui::runtime::accentBrush()";
-            case "AccentColorLight1": "wui::runtime::accentBrush()";
-            case "AccentColorLight2": "wui::runtime::accentBrush()";
-            case "AccentColorDark1": "wui::runtime::accentBrush()";
-            case "AccentColorDark2": "wui::runtime::accentBrush()";
-            default: 'wui::runtime::grayBrush() /* unknown: $colorSpec */';
-        };
+    /**
+     * Translate a ColorValue enum (extracted as a flat
+     * [constructorName, ...args] array by WinUIGenerator) into the C++/WinRT
+     * brush expression that goes into the generated MainWindow.cpp.
+     *
+     * Nullary constructors land on the named runtime helpers; parametric
+     * Rgb/Argb/Hex unpack their components into a single colorBrush() call.
+     * Anything we don't recognise falls back to grayBrush() with a comment
+     * marking the offending spec so it's grep-able in the generated source.
+     */
+    static function generateColorBrush(values:Array<Dynamic>):String {
+        if (values == null || values.length == 0) return "wui::runtime::grayBrush()";
+        var name = Std.string(values[0]);
+        switch (name) {
+            case "Black": return "wui::runtime::blackBrush()";
+            case "White": return "wui::runtime::whiteBrush()";
+            case "Red": return "wui::runtime::redBrush()";
+            case "Green": return "wui::runtime::greenBrush()";
+            case "Blue": return "wui::runtime::blueBrush()";
+            case "Yellow": return "wui::runtime::yellowBrush()";
+            case "Orange": return "wui::runtime::orangeBrush()";
+            case "Purple": return "wui::runtime::purpleBrush()";
+            case "Gray": return "wui::runtime::grayBrush()";
+            case "Transparent": return "wui::runtime::transparentBrush()";
+            case "AccentColor" | "AccentColorLight1" | "AccentColorLight2"
+               | "AccentColorDark1" | "AccentColorDark2":
+                return "wui::runtime::accentBrush()";
+            case "Rgb":
+                if (values.length < 4) return 'wui::runtime::grayBrush() /* Rgb: missing args */';
+                var r = clampByte(values[1]);
+                var g = clampByte(values[2]);
+                var b = clampByte(values[3]);
+                return 'wui::runtime::colorBrush($r, $g, $b)';
+            case "Argb":
+                if (values.length < 5) return 'wui::runtime::grayBrush() /* Argb: missing args */';
+                var a = clampByte(values[1]);
+                var r = clampByte(values[2]);
+                var g = clampByte(values[3]);
+                var b = clampByte(values[4]);
+                return 'wui::runtime::colorBrush($r, $g, $b, $a)';
+            case "Hex":
+                if (values.length < 2) return 'wui::runtime::grayBrush() /* Hex: missing arg */';
+                var parsed = parseHexColor(Std.string(values[1]));
+                if (parsed == null) return 'wui::runtime::grayBrush() /* Hex: bad string ${values[1]} */';
+                return 'wui::runtime::colorBrush(${parsed.r}, ${parsed.g}, ${parsed.b}, ${parsed.a})';
+            default:
+                return 'wui::runtime::grayBrush() /* unknown: $name */';
+        }
+    }
+
+    static function clampByte(v:Dynamic):Int {
+        var n = Std.parseInt(Std.string(v));
+        if (n == null) return 0;
+        if (n < 0) return 0;
+        if (n > 255) return 255;
+        return n;
+    }
+
+    /** Accept `#RGB`, `#RRGGBB`, `#AARRGGBB` (`#` optional). */
+    static function parseHexColor(s:String):{a:Int, r:Int, g:Int, b:Int} {
+        if (s == null) return null;
+        var hex = StringTools.startsWith(s, "#") ? s.substr(1) : s;
+        hex = hex.toLowerCase();
+        for (i in 0...hex.length) {
+            var c = hex.charCodeAt(i);
+            var ok = (c >= "0".code && c <= "9".code)
+                  || (c >= "a".code && c <= "f".code);
+            if (!ok) return null;
+        }
+        function nib2(off:Int):Int {
+            var n = Std.parseInt("0x" + hex.substr(off, 2));
+            return n == null ? 0 : n;
+        }
+        function nib1(off:Int):Int {
+            var n = Std.parseInt("0x" + hex.charAt(off));
+            return n == null ? 0 : n * 17;
+        }
+        switch (hex.length) {
+            case 3:
+                return { a: 255, r: nib1(0), g: nib1(1), b: nib1(2) };
+            case 6:
+                return { a: 255, r: nib2(0), g: nib2(2), b: nib2(4) };
+            case 8:
+                return { a: nib2(0), r: nib2(2), g: nib2(4), b: nib2(6) };
+            default:
+                return null;
+        }
     }
 
     static function generateStateActionCode(action:Dynamic):String {

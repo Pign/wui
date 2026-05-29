@@ -15,13 +15,13 @@ import haxe.Json;
  */
 class BridgeGenerator {
     #if macro
-    public static function generate(appName:String, displayName:String, outputDir:String, windowWidth:Int, windowHeight:Int):Void {
+    public static function generate(appName:String, displayName:String, outputDir:String, windowWidth:Int, windowHeight:Int, backdrop:String, hasTitleBar:Bool):Void {
         if (!FileSystem.exists(outputDir)) {
             FileSystem.createDirectory(outputDir);
         }
 
         generateAppHeader(appName, outputDir);
-        generateAppSource(appName, displayName, outputDir, windowWidth, windowHeight);
+        generateAppSource(appName, displayName, outputDir, windowWidth, windowHeight, backdrop, hasTitleBar);
         generateRuntime(outputDir);
     }
 
@@ -78,7 +78,96 @@ private:
         }
     }
 
-    static function generateAppSource(appName:String, displayName:String, outputDir:String, windowWidth:Int, windowHeight:Int):Void {
+    /** Emit the C++ that sets `Window.SystemBackdrop`. Driven by the
+        bare enum constructor name (`Mica`, `MicaAlt`, `Acrylic`, `None`)
+        coming from the user's `backdrop():Backdrop` override; defaults
+        upstream. Returns "" for `None` so the window keeps its system
+        opaque page background. */
+    // titleBar wiring is no longer a tail-end step — when present it has
+    // to wrap BuildUI's output in a 2-row Grid so the title-bar element
+    // is part of the window's visual tree (SetTitleBar only marks the
+    // drag region; it does NOT add the element). See `contentSetupCode`.
+    static function titleBarSetupCode(_:Bool):String { return ""; }
+
+    /** Emit the body-or-title-bar+body wiring. Without a title bar
+        override this is the original two-liner that builds the UI and
+        hands it to `Content()`. With one, we wrap title bar + body in
+        a Grid:
+            row 0 (Auto)  = BuildTitleBar() output, also passed to
+                            `SetTitleBar()` so the system treats it as
+                            the drag region.
+            row 1 (Star)  = BuildUI() output, gets the rest of the window.
+
+        `ExtendsContentIntoTitleBar(true)` removes the system caption row,
+        which is why the wrapper Grid takes over the whole client area —
+        and why row 0 has to leave ~138px on its right (the codegen
+        already applies that as a min Margin in BuildTitleBar). */
+    static function contentSetupCode(hasTitleBar:Bool):String {
+        if (!hasTitleBar) {
+            return '    auto content = MainWindow::BuildUI(m_window);
+    m_window.Content(content);
+';
+        }
+        return '    // Custom title bar — wrap title bar + body in a Grid so the
+    // title bar element is actually rendered (SetTitleBar only flags
+    // the drag region; it does not insert the element into the tree).
+    {
+        m_window.ExtendsContentIntoTitleBar(true);
+        auto _tb = MainWindow::BuildTitleBar(m_window);
+        auto _body = MainWindow::BuildUI(m_window);
+
+        winrt::Microsoft::UI::Xaml::Controls::Grid _wrap;
+        {
+            winrt::Microsoft::UI::Xaml::Controls::RowDefinition _r0;
+            _r0.Height(winrt::Microsoft::UI::Xaml::GridLength{ 0, winrt::Microsoft::UI::Xaml::GridUnitType::Auto });
+            _wrap.RowDefinitions().Append(_r0);
+            winrt::Microsoft::UI::Xaml::Controls::RowDefinition _r1;
+            _r1.Height(winrt::Microsoft::UI::Xaml::GridLength{ 1, winrt::Microsoft::UI::Xaml::GridUnitType::Star });
+            _wrap.RowDefinitions().Append(_r1);
+        }
+        if (auto _tbFe = _tb.try_as<winrt::Microsoft::UI::Xaml::FrameworkElement>()) {
+            winrt::Microsoft::UI::Xaml::Controls::Grid::SetRow(_tbFe, 0);
+        }
+        if (auto _bodyFe = _body.try_as<winrt::Microsoft::UI::Xaml::FrameworkElement>()) {
+            winrt::Microsoft::UI::Xaml::Controls::Grid::SetRow(_bodyFe, 1);
+        }
+        _wrap.Children().Append(_tb);
+        _wrap.Children().Append(_body);
+
+        m_window.Content(_wrap);
+        m_window.SetTitleBar(_tb);
+    }
+';
+    }
+
+    static function backdropSetupCode(kind:String):String {
+        return switch (kind) {
+            case "None": "";
+            case "Acrylic":
+                '    // Win11 desktop acrylic backdrop — translucent blur with noise.
+    m_window.SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::DesktopAcrylicBackdrop());
+
+';
+            case "MicaAlt":
+                '    // Win11 Mica backdrop (BaseAlt variant — higher contrast).
+    {
+        auto _mica = winrt::Microsoft::UI::Xaml::Media::MicaBackdrop();
+        _mica.Kind(winrt::Microsoft::UI::Composition::SystemBackdrops::MicaKind::BaseAlt);
+        m_window.SystemBackdrop(_mica);
+    }
+
+';
+            default: // "Mica" — also the safe fallback for an unrecognised value
+                '    // Win11 Mica backdrop — translucent surface tinted by wallpaper.
+    m_window.SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::MicaBackdrop());
+
+';
+        };
+    }
+
+    static function generateAppSource(appName:String, displayName:String, outputDir:String, windowWidth:Int, windowHeight:Int, backdrop:String, hasTitleBar:Bool):Void {
+        var backdropInit = backdropSetupCode(backdrop);
+        var contentInit = contentSetupCode(hasTitleBar);
         var consoleInit = readDebugConsole()
             ? '    // Debug console (opt-in via wui.json "debugConsole": true).
     // Sys.println, printf, std::cout become visible in the attached console.
@@ -97,12 +186,53 @@ private:
 #include "App.h"
 #include "MainWindow.h"
 #include <cstdio>
+#include <string>
+#include <winrt/Microsoft.UI.Composition.SystemBackdrops.h>
 
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
+namespace winrt_media = winrt::Microsoft::UI::Xaml::Media;
 
 // Boot the Haxe runtime (linked from libHelloworld.lib produced by hxcpp).
 // Defined in build/cpp/src/__lib__.cpp when -D static_link is set.
 extern "C" void __hxcpp_lib_main();
+
+// ---- wui.Window bridges --------------------------------------------------
+// Imperative Haxe → Win32 surface for runtime-mutable Window properties.
+// `wui::runtime::window` is set below in OnLaunched; every call is
+// marshalled onto the UI thread so it stays safe from worker threads
+// (e.g. an OIDC poll loop calling `Window.setTitle(...)`).
+
+extern "C" void clw_window_set_title(const wchar_t* val, int val_len) {
+    if (!wui::runtime::window) return;
+    std::wstring s(val, val_len);
+    wui::runtime::runOnUIThread([s]() {
+        if (wui::runtime::window) wui::runtime::window.Title(winrt::hstring(s));
+    });
+}
+
+extern "C" void clw_window_set_backdrop(int kind) {
+    if (!wui::runtime::window) return;
+    wui::runtime::runOnUIThread([kind]() {
+        if (!wui::runtime::window) return;
+        switch (kind) {
+            case 0: // None
+                wui::runtime::window.SystemBackdrop(nullptr);
+                break;
+            case 1: // Mica
+                wui::runtime::window.SystemBackdrop(winrt_media::MicaBackdrop());
+                break;
+            case 2: { // MicaAlt
+                auto _m = winrt_media::MicaBackdrop();
+                _m.Kind(winrt::Microsoft::UI::Composition::SystemBackdrops::MicaKind::BaseAlt);
+                wui::runtime::window.SystemBackdrop(_m);
+                break;
+            }
+            case 3: // Acrylic
+                wui::runtime::window.SystemBackdrop(winrt_media::DesktopAcrylicBackdrop());
+                break;
+        }
+    });
+}
 
 void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
 {
@@ -113,19 +243,19 @@ void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
     m_window = winrt_xaml::Window();
     m_window.Title(L"$displayName");
 
-    // Store the dispatcher queue for UI thread marshaling
+    // Store the dispatcher queue + window handle for marshaling and
+    // imperative C++ calls from Haxe (wui.Window).
     wui::runtime::dispatcherQueue = m_window.DispatcherQueue();
+    wui::runtime::window = m_window;
 
     // Resize window
     if (auto appWindow = m_window.AppWindow()) {
         appWindow.Resize(winrt::Windows::Graphics::SizeInt32{ $windowWidth, $windowHeight });
     }
 
-    // Build the UI from Haxe-generated code
-    auto content = MainWindow::BuildUI(m_window);
-    m_window.Content(content);
-
-    m_window.Activate();
+    // Build the UI from Haxe-generated code (Content + optional title bar)
+$contentInit
+$backdropInit    m_window.Activate();
 }
 
 // Application entry point
@@ -165,6 +295,14 @@ namespace wui { namespace runtime {
     // ---- UI Thread Dispatch ----
 
     inline winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcherQueue{ nullptr };
+
+    // ---- Main window handle ----
+    //
+    // Set in App::OnLaunched. Used by the extern "C" `clw_window_*`
+    // bridges (see App.cpp) so `wui.Window.setTitle` / `setBackdrop`
+    // from Haxe land safely on a real WinRT object even when called
+    // from a worker thread.
+    inline winrt::Microsoft::UI::Xaml::Window window{ nullptr };
 
     inline void runOnUIThread(std::function<void()> fn) {
         if (dispatcherQueue && !dispatcherQueue.HasThreadAccess()) {
