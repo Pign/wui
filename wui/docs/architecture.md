@@ -201,13 +201,14 @@ The generated `.vcxproj` sets `WindowsAppSDKSelfContained=true` and `WindowsPack
 
 ## Platform APIs
 
-The `wui.platform.Windows` class exposes window-level settings:
+Window-level state is split into two surfaces — see [Window](window.md) for the full reference.
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `extendIntoTitleBar` | `Bool` | `false` | Extend content into the title bar area |
-| `titleBarColor` | `Null<String>` | `null` | Custom title bar color (ARGB hex) |
-| `showMinimize` | `Bool` | `true` | Show minimize button |
-| `showMaximize` | `Bool` | `true` | Show maximize button |
-| `minWidth` | `Int` | `320` | Minimum window width |
-| `minHeight` | `Int` | `240` | Minimum window height |
+| Concern | Declarative (initial value) | Imperative (runtime mutation) |
+|---------|------------------------------|--------------------------------|
+| Window title | `App.appName():String` override | `wui.Window.setTitle(s)` |
+| Translucent material | `App.backdrop():Backdrop` override | `wui.Window.setBackdrop(b)` |
+| Custom title bar | `App.titleBar():View` override | *(static — re-shapes via `@:state` bindings in the view)* |
+
+For reactive window state, compose `wui.Window.*` with `wui.Effect.run` inside the `App.effects():Void` override — see [State / Effect](state/README.md#effect).
+
+> `wui.platform.Windows` is a stub holdover from an earlier design pass; its `extendIntoTitleBar` / `titleBarColor` / `show{Minimize,Maximize}` / `min{Width,Height}` static fields are not wired into the pipeline. Use the surfaces above instead. The stub will be removed in a future release.
