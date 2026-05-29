@@ -1471,6 +1471,11 @@ class WinUIGenerator {
         return wrapperName;
     }
 
+    // Note: the .value -> StateBridge rewrite happens at Expr level
+    // inside StateMacro (pre-typing) — Context.typeExpr at this point
+    // in onAfterTyping trips an internal compiler assertion. See
+    // StateMacro.rewriteStateValueAccess for the implementation.
+
     /** Emit a generated `wui.generated.Callbacks` class containing one
         static wrapper per registered callback. MainWindow.cpp's click
         handlers call into this class via its hxcpp-generated qualified
