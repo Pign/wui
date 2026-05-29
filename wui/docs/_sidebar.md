@@ -5,6 +5,7 @@
   - [Views](views/README.md)
   - [Modifiers](modifiers.md)
   - [State Management](state/README.md)
+  - [Window (title, backdrop, title bar)](window.md)
 - Reference
   - [CLI](cli.md)
   - [Architecture](architecture.md)

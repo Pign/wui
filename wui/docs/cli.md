@@ -157,7 +157,7 @@ Every wui project has a `wui.json` in its root. This file configures the build.
 |-------|------|-------------|
 | `appName` | string | Internal name. Used for the `.vcxproj`, `.exe`, the App C++ class, and the C++ namespaces. |
 | `packageName` | string | Reverse-domain package identifier. |
-| `displayName` | string | Human-readable name. *Not currently used for the window title* — the title comes from the `appName():String` override on your App subclass, falling back to the Haxe class name. |
+| `displayName` | string | Human-readable name. *Not currently used for the window title* — the title comes from the `appName():String` override on your App subclass, falling back to the Haxe class name. For runtime updates, see [`wui.Window.setTitle`](window.md#wuiwindow--imperative-api). |
 | `windowsAppSdkVersion` | string | **Concrete** Windows App SDK NuGet version. The `.vcxproj` imports props/targets from `..\packages\Microsoft.WindowsAppSDK.<version>\...` literally, so wildcards like `1.8.*` would break the imports and are rejected with a warning (fallback to the built-in default). Pick a specific build of the SDK that's available on your NuGet feed. |
 | `targetFramework` | string | Target framework moniker. |
 | `architecture` | string | Default build architecture (`x64` or `arm64`). Overridden by `--arch`. |

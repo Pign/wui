@@ -232,6 +232,76 @@ This sidesteps the bug for the common "worker needs to know app state" case. A p
 
 ---
 
+## Effect
+
+Reactive side-effects for everything that lives *outside* the View tree — window title, taskbar progress, native notifications, file watchers. The same mental model as React's `useEffect`: a lambda runs once at startup and then again every time one of its declared deps changes.
+
+```haxe
+import wui.Effect;
+import wui.Window;
+
+class MyApp extends wui.App {
+    @:state var unreadCount:Int = 0;
+
+    override function effects():Void {
+        Effect.run(() -> {
+            var n = StateBridge.getInt("unreadCount");
+            Window.setTitle('Inbox ($n) — Courrier Libre');
+        }, [unreadCount]);
+    }
+}
+```
+
+### Where effects live: `effects():Void`
+
+Override the `effects()` virtual on your `App` subclass. The macro walks its body at compile time, lifts every `Effect.run` lambda into `wui.generated.Callbacks`, and emits matching listener subscriptions in `MainWindow.cpp`. The method itself is never invoked at runtime — same pattern as `body()`.
+
+`effects()` runs in instance context, so `@:state` fields are addressable as typed refs (`unreadCount`, not `"unreadCount"`). Typos become compile errors and rename refactors carry through.
+
+### Deps: typed refs or string literals
+
+```haxe
+Effect.run(fn, [unreadCount, currentFolder])     // typed @:state field refs (preferred)
+Effect.run(fn, ["unreadCount", "currentFolder"]) // string literals (escape hatch)
+```
+
+Use refs from `effects()`. The string form stays available for the rare case where you call `Effect.run` from `static main()` (no instance context, so refs aren't in scope).
+
+### Lifecycle
+
+| Phase | What happens |
+|-------|--------------|
+| Compile | Macro lifts each lambda into `Callbacks_obj.wui_eff_<N>()`, records `{wrapperName, deps[]}`. |
+| Runtime, `BuildUI()` | Each effect runs once (initial invocation, matches React `useEffect(fn, [deps])` first call). |
+| Runtime, on state change | The C++ `notify_<dep>()` iterates `s_<dep>_listeners`; the effect wrapper re-runs via `DispatcherQueue.TryEnqueue` (same re-entrance protection as view bindings). |
+
+### Reading state inside the effect body
+
+The lambda is **lifted to a static C++ wrapper** — same constraint as `StateAction.Custom`. It has no enclosing runtime scope, so:
+
+- Use `StateBridge.get{String,Int,Float,Bool}("name")` to read the *current* value. The Haxe-side `State<T>.value` is stale; only the C++ `s_<name>` is the source of truth.
+- Static helpers, module-level functions, and other class statics work normally.
+
+### Empty deps — "run once, never re-run"
+
+```haxe
+Effect.run(() -> initializeAnalytics(), []);
+```
+
+No subscriptions are registered. The effect fires exactly once at startup. Matches React's `useEffect(fn, [])` semantics.
+
+### Constraints
+
+- The deps argument must be an **inline array literal**. `var deps = [...]; Effect.run(fn, deps);` won't be picked up — the macro only inspects the literal.
+- Each ref-form dep must resolve to a `@:state` field on the App; mismatches surface as compile-time warnings.
+- `Effect.run` calls inside conditionals or loops in `effects()` are extracted unconditionally (the macro flattens them). Use `if`/`return` inside the *lambda body*, not around the `Effect.run` call.
+
+### Cleanup
+
+There is no cleanup phase yet — the lifted lambdas live for the application lifetime. For a single-Window desktop app this is fine; if you grow into multi-window scenarios with conditional effects, file a Plane issue.
+
+---
+
 ## Binding\<T\>
 
 Two-way binding between a state and a control that both reads and writes. Used by `TextBox`, `ToggleSwitch`, `Slider`, `ComboBox`, and `CheckBox`.
