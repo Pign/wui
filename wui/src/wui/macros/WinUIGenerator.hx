@@ -208,48 +208,78 @@ class WinUIGenerator {
      */
     static function collectStateFields(type:Type):Array<{name:String, type:String, initial:String}> {
         var result:Array<{name:String, type:String, initial:String}> = [];
+        collectStateFieldsRec(type, "", result);
+        return result;
+    }
+
+    /** Walk a class' State<T>-typed fields (primitive @:state) and flatten
+        Observable-typed fields by recursing into their own @:state
+        layouts with the dotted scope prefix.
+
+        Composite keys ("settings.darkMode") are what UIBuilder uses for
+        bridge dispatch and listener subscription. The C++ side sanitises
+        them to `s_settings_darkMode` via `sanitizeCppName`. */
+    static function collectStateFieldsRec(type:Type, scope:String, out:Array<{name:String, type:String, initial:String}>):Void {
         switch (type) {
             case TInst(ref, _):
                 var cls = ref.get();
                 for (field in cls.fields.get()) {
-                    // Check if the field is a State<T> type
+                    var fieldScope = (scope.length == 0) ? field.name : scope + "." + field.name;
                     switch (field.type) {
                         case TInst(tref, params):
                             var typeName = tref.get().name;
+                            var typePack = tref.get().pack.join(".");
                             if (typeName == "State" && params.length > 0) {
-                                var cppType = "int"; // default
-                                var initial = "0";
-
-                                // Pull the declared default expression out of
-                                // the `@:wuiInitial` meta StateMacro stashed.
-                                var explicitInitial:String = null;
-                                for (m in field.meta.get()) {
-                                    if (m.name == ":wuiInitial" && m.params != null && m.params.length > 0) {
-                                        explicitInitial = exprToCppLiteral(m.params[0]);
-                                    }
-                                }
-
-                                switch (params[0]) {
-                                    case TAbstract(aref, _):
-                                        var aname = aref.get().name;
-                                        if (aname == "Int") { cppType = "int"; initial = explicitInitial != null ? explicitInitial : "0"; }
-                                        else if (aname == "Float") { cppType = "double"; initial = explicitInitial != null ? explicitInitial : "0.0"; }
-                                        else if (aname == "Bool") { cppType = "bool"; initial = explicitInitial != null ? explicitInitial : "false"; }
-                                    case TInst(sref, _):
-                                        if (sref.get().name == "String") {
-                                            cppType = "std::wstring";
-                                            initial = explicitInitial != null ? explicitInitial : 'L""';
-                                        }
-                                    default:
-                                }
-                                result.push({ name: field.name, type: cppType, initial: initial });
+                                appendPrimitiveStateField(field, params[0], fieldScope, out);
+                            } else if (extendsObservable(tref.get())) {
+                                // Nested Observable @:state — recurse so its
+                                // own State<T> fields land in the flat list
+                                // with a dotted prefix.
+                                collectStateFieldsRec(field.type, fieldScope, out);
                             }
                         default:
                     }
                 }
             default:
         }
-        return result;
+    }
+
+    static function appendPrimitiveStateField(field:ClassField, paramType:Type, name:String, out:Array<{name:String, type:String, initial:String}>):Void {
+        var cppType = "int";
+        var initial = "0";
+
+        var explicitInitial:String = null;
+        for (m in field.meta.get()) {
+            if (m.name == ":wuiInitial" && m.params != null && m.params.length > 0) {
+                explicitInitial = exprToCppLiteral(m.params[0]);
+            }
+        }
+
+        switch (paramType) {
+            case TAbstract(aref, _):
+                var aname = aref.get().name;
+                if (aname == "Int") { cppType = "int"; initial = explicitInitial != null ? explicitInitial : "0"; }
+                else if (aname == "Float") { cppType = "double"; initial = explicitInitial != null ? explicitInitial : "0.0"; }
+                else if (aname == "Bool") { cppType = "bool"; initial = explicitInitial != null ? explicitInitial : "false"; }
+            case TInst(sref, _):
+                if (sref.get().name == "String") {
+                    cppType = "std::wstring";
+                    initial = explicitInitial != null ? explicitInitial : 'L""';
+                }
+            default:
+        }
+        out.push({ name: name, type: cppType, initial: initial });
+    }
+
+    /** True iff the class's super chain hits wui.state.Observable. */
+    static function extendsObservable(cls:ClassType):Bool {
+        var cur = cls;
+        while (cur != null) {
+            if (cur.pack.length == 2 && cur.pack[0] == "wui" && cur.pack[1] == "state" && cur.name == "Observable") return true;
+            if (cur.superClass == null) return false;
+            cur = cur.superClass.t.get();
+        }
+        return false;
     }
 
     /** Render an untyped (build-macro-time) Expr as a C++ literal of
@@ -1118,10 +1148,20 @@ class WinUIGenerator {
                 };
                 // state.value access
                 if (fieldName == "value") return extractStateFieldRef(obj);
-                // Direct field reference (this.count)
                 if (fieldName != null) {
+                    // 1. Direct @:state field (App-level primitive)
                     for (sf in UIBuilder.stateFields) {
                         if (fieldName == sf.name) return sf.name;
+                    }
+                    // 2. Composite @:state field (Observable-decomposed —
+                    //    e.g. `settings.darkMode` resolves to the bridge
+                    //    key "settings.darkMode" in stateFields).
+                    var parentChain = buildAccessChain(obj);
+                    if (parentChain != null) {
+                        var composite = parentChain + "." + fieldName;
+                        for (sf in UIBuilder.stateFields) {
+                            if (sf.name == composite) return sf.name;
+                        }
                     }
                 }
                 return null;
@@ -1272,6 +1312,48 @@ class WinUIGenerator {
      * Detects: "prefix" + stateField patterns.
      * Returns {text, boundState, format} or null if not state-bound.
      */
+    /** Reconstruct the dotted access path for a typed expression so we
+        can match nested @:state on Observable composites against the
+        flat stateFields list (which already uses composite keys like
+        "settings.darkMode"). Returns null for expressions that aren't
+        a chain of instance-field reads off `this` / `super`. */
+    static function buildAccessChain(expr:TypedExpr):String {
+        if (expr == null) return null;
+        switch (expr.expr) {
+            case TField(receiver, fa):
+                var fieldName = switch (fa) {
+                    case FInstance(_, _, cf): cf.get().name;
+                    case FDynamic(s): s;
+                    default: null;
+                };
+                if (fieldName == null) return null;
+                switch (receiver.expr) {
+                    case TConst(TThis) | TConst(TSuper):
+                        return fieldName;
+                    default:
+                }
+                var parent = buildAccessChain(receiver);
+                if (parent != null) return parent + "." + fieldName;
+                // Fallback — if the receiver itself isn't a chain we
+                // accept the bare field name. Helps recognise patterns
+                // like `local.settings.darkMode` once we resolve
+                // locals upstream.
+                return fieldName;
+            case TLocal(v):
+                var resolved = localExprs.get(v.name);
+                if (resolved != null) return buildAccessChain(resolved);
+                return null;
+            case TParenthesis(inner):
+                return buildAccessChain(inner);
+            case TCast(inner, _):
+                return buildAccessChain(inner);
+            case TMeta(_, inner):
+                return buildAccessChain(inner);
+            default:
+                return null;
+        }
+    }
+
     /**
      * Recursively search an expression for a state field reference,
      * unwrapping calls like .toString(), Std.string(), etc.
@@ -1544,16 +1626,20 @@ class WinUIGenerator {
         };
     }
 
-    /** Return C++ expression to convert a state variable to std::wstring. */
+    /** Return C++ expression to convert a state variable to std::wstring.
+        Composite Observable keys carry dots in `stateName` (the bridge
+        key) — `cppId` flips them to underscores so the emitted symbol
+        matches the static variable declaration. */
     static function stateToWstring(stateName:String):String {
+        var id = UIBuilder.cppId(stateName);
         for (sf in UIBuilder.stateFields) {
             if (sf.name == stateName) {
-                if (sf.type == "std::wstring") return 's_$stateName';
-                if (sf.type == "bool") return '(s_$stateName ? std::wstring(L"true") : std::wstring(L"false"))';
-                return 'std::to_wstring(s_$stateName)';
+                if (sf.type == "std::wstring") return 's_$id';
+                if (sf.type == "bool") return '(s_$id ? std::wstring(L"true") : std::wstring(L"false"))';
+                return 'std::to_wstring(s_$id)';
             }
         }
-        return 'std::to_wstring(s_$stateName)';
+        return 'std::to_wstring(s_$id)';
     }
 
     static function defaultNode():ViewNode {
