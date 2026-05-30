@@ -97,6 +97,128 @@ Supported default expression literals: `Int`, `Float`, `Bool`, `String`. Other e
 
 You then use `count.value`, `count.inc(1)`, etc. in your `body()`.
 
+### Type rule
+
+`@:state` is intentionally restrictive. The macro enforces — at compile time, with `Context.error` pointing at the offending field — that the field type is one of:
+
+1. A primitive: `String`, `Int`, `Float`, `Bool`
+2. A class extending [`wui.state.Observable`](#observable) — for composite state with field-level reactivity
+
+Anything else (a `typedef`, `Array<T>`, a class without `Observable`, a `Map`, etc.) is rejected:
+
+```
+@:state var inbox:Array<Email> = [];
+                ^^^^^^^^^^^^
+@:state var inbox:T — type must be a primitive (String/Int/Float/Bool)
+or extend wui.state.Observable.
+```
+
+The rule keeps the bridge layer honest: every reactive cell lives in C++ as a primitive (or a primitive decomposed from an Observable's fields), and the framework never has to marshal opaque Haxe objects across language boundaries.
+
+Planned but not yet eligible: nullary enums (will be stored as `int` via the index), and a marker interface for value-replacement composites like `ImmutableList<T>`.
+
+---
+
+## Observable
+
+Composite reactive state. An `Observable` subclass is a Haxe-side container for one or more `@:state` fields whose individual cells participate in the reactive bridge under a dotted scope.
+
+```haxe
+class Settings extends wui.state.Observable {
+    @:state public var darkMode:Bool = false;
+    @:state public var fontSize:Int = 14;
+}
+
+class MyApp extends wui.App {
+    @:state var settings:Settings = new Settings();
+}
+```
+
+The macro expands `settings` into two bridge entries — `"settings.darkMode"` and `"settings.fontSize"` — exactly as if the user had written:
+
+```haxe
+@:state var settings_darkMode:Bool = false;
+@:state var settings_fontSize:Int = 14;
+```
+
+…but with three things you get for free that flattening by hand doesn't:
+
+- Composite reads in `body()` resolve to the same dotted key.
+  `new Text("Size: " + settings.fontSize.value)` subscribes the
+  TextBlock to the `"settings.fontSize"` listener list.
+- `Settings` stays a real Haxe type. You can give it methods, helpers,
+  or non-`@:state` caches without polluting the App.
+- The dotted scope is recursive (planned). `Settings` containing a
+  `@:state var network:Network` where `Network extends Observable`
+  produces keys like `"settings.network.host"`.
+
+### Codegen contract
+
+| Concern | App-level @:state | Observable @:state |
+|---------|-------------------|--------------------|
+| Field type after macro | `var x:State<T>` | `var x:State<T>` |
+| Bridge key | `"x"` | `"<scope>.x"` |
+| State<T> constructed in | `new()` | `_attach(scope)` |
+| C++ symbol | `s_x` | `s_<scope>_x` (dots → underscores via `cppId`) |
+
+`Observable._attach(scope)` is called by the enclosing App (or parent
+Observable) immediately after construction. The base implementation
+just stores `_scope`; subclasses get an auto-generated override that
+also instantiates each `State<T>` with the scope-prefixed name.
+
+You don't call `_attach` yourself. The macro injects the call as part
+of the constructor codegen on whichever class declares
+`@:state var x:MyObservable`.
+
+### Bridge key vs C++ identifier
+
+Composite keys carry dots in the wstring the bridge dispatch compares
+against:
+
+```cpp
+if (n == L"settings.darkMode") { /* ... */ }
+```
+
+but C++ identifiers can't have dots, so the matching static / notify /
+listener symbols sanitise to underscores:
+
+```cpp
+static bool s_settings_darkMode = false;
+static void notify_settings_darkMode() { /* ... */ }
+static std::vector<...> s_settings_darkMode_listeners;
+```
+
+The split is invisible to user code — `StateBridge.setBool("settings.darkMode", true)` works exactly like its primitive counterpart.
+
+### Phase-1 limitations
+
+What works today:
+
+- Single-level Observable composition: `@:state var settings:Settings`
+  with primitive fields on Settings.
+- Body-level bindings via `new Text(... settings.fontSize.value ...)`
+  with composite key resolution.
+- Live initial render: a Text widget bound to a composite Observable
+  field shows the C++ initial value at construction, not a generic "0".
+
+Not yet wired:
+
+- Nested Observable in Observable. `Settings.network:Network` where
+  Network extends Observable is rejected with a clear error pointing
+  at the field. Recursion will land in a follow-up — the runtime
+  primitives already support it; only the macro's scope propagation
+  needs the recursive walk.
+- `.value` rewrite for composite reads inside `effects()` /
+  `StateAction.Custom` lambdas. `settings.fontSize.value` in a lifted
+  lambda currently reads the stale Haxe-side `State<Int>._value`
+  instead of going through `StateBridge`. Primitive `@:state` reads
+  (`searchQuery.value`) still work through the existing rewrite.
+- Composite refs in `Effect.run` deps (`[settings.darkMode]`). Pass the
+  composite key as a string for now (`["settings.darkMode"]`).
+- Inbox-style `Array<Observable>` — out of scope for `Observable`
+  itself; tracked under a separate `Immutable` marker (see the
+  type-rule "planned" note above).
+
 ---
 
 ## StateAction
@@ -341,33 +463,6 @@ var binding = new Binding<String>(
     (v) -> name.value = v.toLowerCase()
 );
 ```
-
----
-
-## Observable
-
-Base class for observable data models. Tracks which properties have changed and notifies listeners by property name.
-
-```haxe
-class TodoItem extends Observable {
-    public var title:String;
-    public var completed:Bool;
-
-    public function setTitle(t:String) {
-        title = t;
-        notifyChanged("title");
-    }
-}
-```
-
-### Methods
-
-| Method | Description |
-|--------|-------------|
-| `onPropertyChanged(listener:String -> Void)` | Subscribe to property-level change notifications. |
-| `notifyChanged(propertyName:String)` | Fire a change notification for the named property. |
-
-Use `Observable` for model objects in `ListView` and `ForEach` templates.
 
 ---
 
