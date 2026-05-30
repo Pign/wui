@@ -32,6 +32,16 @@ class UIBuilder {
         return '${prefix}_${varCounter++}';
     }
 
+    /** Sanitize a state name into a legal C++ identifier suffix.
+        Composite Observable keys carry dots ("settings.darkMode") which
+        match the bridge dispatch wstring; the static variables, notify
+        functions, and listener vectors that mirror them need underscores
+        instead ("s_settings_darkMode"). Bridge comparisons still use
+        the original dotted key. */
+    public static inline function cppId(name:String):String {
+        return StringTools.replace(name, ".", "_");
+    }
+
     /**
      * Generate C++/WinRT code for a complete MainWindow.h/cpp
      * from a serialized view tree description.
@@ -137,20 +147,20 @@ $titleBarDecl}
         // Build state declarations
         var stateDecls = "";
         for (sf in stateFields) {
-            stateDecls += '    static ${sf.type} s_${sf.name} = ${sf.initial};\n';
+            stateDecls += '    static ${sf.type} s_${cppId(sf.name)} = ${sf.initial};\n';
         }
 
         // Build state subscriber list type
         var subscriberDecls = "";
         for (sf in stateFields) {
-            subscriberDecls += '    static std::vector<std::function<void()>> s_${sf.name}_listeners;\n';
+            subscriberDecls += '    static std::vector<std::function<void()>> s_${cppId(sf.name)}_listeners;\n';
         }
 
         // Build notify function
         var notifyFuncs = "";
         for (sf in stateFields) {
-            notifyFuncs += '    static void notify_${sf.name}() {\n';
-            notifyFuncs += '        for (auto& fn : s_${sf.name}_listeners) fn();\n';
+            notifyFuncs += '    static void notify_${cppId(sf.name)}() {\n';
+            notifyFuncs += '        for (auto& fn : s_${cppId(sf.name)}_listeners) fn();\n';
             notifyFuncs += '    }\n';
         }
 
@@ -170,8 +180,21 @@ $titleBarDecl}
                 setBranches = '    std::wstring n(name, name_len);\n';
                 getBranches = '    std::wstring n(name, name_len);\n';
                 for (sf in typedFields) {
-                    setBranches += '    if (n == L"${sf.name}") { ${setBody(sf.name)} return; }\n';
-                    getBranches += '    if (n == L"${sf.name}") { ${getBody(sf.name)} return; }\n';
+                    // The wstring key keeps its dots (it's the bridge key
+                    // that StateBridge.X("foo.bar") sends from Haxe); the
+                    // C++ symbols use `cppId` so identifiers stay legal.
+                    //
+                    // setBody is a statement list ending without `return`
+                    // — the dispatch tacks on `return;` to exit the void
+                    // setter. getBody must include its own `return X;`
+                    // (the wstring case writes out-params + `return;`,
+                    // the numeric/bool cases return a value directly);
+                    // appending another `return;` here would be either
+                    // dead code (string) or a void-return from a typed
+                    // getter (int/bool/double), which fails to compile.
+                    var id = cppId(sf.name);
+                    setBranches += '    if (n == L"${sf.name}") { ${setBody(id)} return; }\n';
+                    getBranches += '    if (n == L"${sf.name}") { ${getBody(id)} }\n';
                 }
             }
             return signature
@@ -191,7 +214,7 @@ $titleBarDecl}
             + '    *out_buf = L""; *out_len = 0;\n'
             + '}\n',
             function(name) return 'MainWindow::s_$name.assign(val, val_len); MainWindow::notify_$name();',
-            function(name) return '*out_buf = MainWindow::s_$name.c_str(); *out_len = (int)MainWindow::s_$name.length();'
+            function(name) return '*out_buf = MainWindow::s_$name.c_str(); *out_len = (int)MainWindow::s_$name.length(); return;'
         );
         // Int
         dispatchCode += buildDispatch(
@@ -244,7 +267,7 @@ $titleBarDecl}
             var s = "";
             for (binding in bindings) {
                 var fmt = binding.format;
-                s += '    s_${binding.stateName}_listeners.push_back([${binding.controlVar}]() {\n';
+                s += '    s_${cppId(binding.stateName)}_listeners.push_back([${binding.controlVar}]() {\n';
                 s += '        if (wui::runtime::dispatcherQueue) {\n';
                 s += '            wui::runtime::dispatcherQueue.TryEnqueue([${binding.controlVar}]() {\n';
                 s += '                $fmt\n';
@@ -269,7 +292,7 @@ $titleBarDecl}
             for (eff in effects) {
                 effectsLines += '    ::wui::generated::Callbacks_obj::${eff.wrapperName}();\n';
                 for (d in eff.deps) {
-                    effectsLines += '    s_${d}_listeners.push_back([]() {\n';
+                    effectsLines += '    s_${cppId(d)}_listeners.push_back([]() {\n';
                     effectsLines += '        if (wui::runtime::dispatcherQueue) {\n';
                     effectsLines += '            wui::runtime::dispatcherQueue.TryEnqueue([]() {\n';
                     effectsLines += '                ::wui::generated::Callbacks_obj::${eff.wrapperName}();\n';
@@ -495,24 +518,27 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
         lines.push('winrt_controls::TextBlock $varName;');
 
         var text = node.properties.get("text");
-        if (text != null) {
-            var escaped = escapeWideString(Std.string(text));
-            lines.push('$varName.Text(L"$escaped");');
-        }
-
-        // Check if this text should be bound to a state variable
         var boundState = node.properties.get("boundState");
         var boundFormat = node.properties.get("boundFormat");
+
         if (boundState != null) {
+            // When a state binding exists we set the initial Text via
+            // the SAME format string the change-listener uses, so the
+            // widget reflects the *current* C++ value at construction
+            // (not the macro-time stateInitialText approximation, which
+            // would freeze e.g. a composite Int field at "0").
             var stateName = Std.string(boundState);
-            var format = boundFormat != null ? Std.string(boundFormat) : '$varName.Text(wui::runtime::toHString(s_$stateName));';
-            // Replace CTRL placeholder with actual variable name
+            var format = boundFormat != null ? Std.string(boundFormat) : '$varName.Text(wui::runtime::toHString(s_${cppId(stateName)}));';
             format = StringTools.replace(format, "CTRL", varName);
+            lines.push(format);
             stateBindings.push({
                 stateName: stateName,
                 controlVar: varName,
                 format: format
             });
+        } else if (text != null) {
+            var escaped = escapeWideString(Std.string(text));
+            lines.push('$varName.Text(L"$escaped");');
         }
 
         // Auto-bind: if text matches a state field's initial value, bind it
@@ -523,7 +549,7 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
                     stateBindings.push({
                         stateName: sf.name,
                         controlVar: varName,
-                        format: '$varName.Text(winrt::hstring(std::to_wstring(s_${sf.name})));'
+                        format: '$varName.Text(winrt::hstring(std::to_wstring(s_${cppId(sf.name)})));'
                     });
                     break;
                 }
@@ -569,11 +595,11 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
             var clickCode:String = null;
 
             if (labelStr == "+" || labelStr == "Increment" || labelStr == "+ Increment") {
-                clickCode = 's_${sf.name}++; notify_${sf.name}();';
+                clickCode = 's_${cppId(sf.name)}++; notify_${cppId(sf.name)}();';
             } else if (labelStr == "-" || labelStr == "Decrement" || labelStr == "- Decrement") {
-                clickCode = 's_${sf.name}--; notify_${sf.name}();';
+                clickCode = 's_${cppId(sf.name)}--; notify_${cppId(sf.name)}();';
             } else if (labelStr == "Reset") {
-                clickCode = 's_${sf.name} = ${sf.initial}; notify_${sf.name}();';
+                clickCode = 's_${cppId(sf.name)} = ${sf.initial}; notify_${cppId(sf.name)}();';
             }
 
             if (clickCode != null) {
@@ -603,18 +629,18 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
         if (boundState != null) {
             var stateName = Std.string(boundState);
             // Set initial value
-            lines.push('$varName.Text(winrt::hstring(s_$stateName));');
+            lines.push('$varName.Text(winrt::hstring(s_${cppId(stateName)}));');
             // TextBox → state (on text change)
             lines.push('$varName.TextChanged([](winrt::Windows::Foundation::IInspectable const& sender, winrt_controls::TextChangedEventArgs const&) {');
             lines.push('    auto h = sender.as<winrt_controls::TextBox>().Text();');
-            lines.push('    s_$stateName = std::wstring(h.c_str(), h.size());');
-            lines.push('    notify_$stateName();');
+            lines.push('    s_${cppId(stateName)} = std::wstring(h.c_str(), h.size());');
+            lines.push('    notify_${cppId(stateName)}();');
             lines.push('});');
             // State → TextBox
             stateBindings.push({
                 stateName: stateName,
                 controlVar: varName,
-                format: 'if ($varName.Text() != winrt::hstring(s_$stateName)) $varName.Text(winrt::hstring(s_$stateName));'
+                format: 'if ($varName.Text() != winrt::hstring(s_${cppId(stateName)})) $varName.Text(winrt::hstring(s_${cppId(stateName)}));'
             });
         }
 
@@ -636,15 +662,15 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
         var boundState = node.properties.get("boundState");
         if (boundState != null) {
             var stateName = Std.string(boundState);
-            lines.push('$varName.IsOn(s_$stateName);');
+            lines.push('$varName.IsOn(s_${cppId(stateName)});');
             lines.push('$varName.Toggled([](winrt::Windows::Foundation::IInspectable const& sender, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    s_$stateName = sender.as<winrt_controls::ToggleSwitch>().IsOn();');
-            lines.push('    notify_$stateName();');
+            lines.push('    s_${cppId(stateName)} = sender.as<winrt_controls::ToggleSwitch>().IsOn();');
+            lines.push('    notify_${cppId(stateName)}();');
             lines.push('});');
             stateBindings.push({
                 stateName: stateName,
                 controlVar: varName,
-                format: '$varName.IsOn(s_$stateName);'
+                format: '$varName.IsOn(s_${cppId(stateName)});'
             });
         }
 
@@ -668,15 +694,15 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
         var boundState = node.properties.get("boundState");
         if (boundState != null) {
             var stateName = Std.string(boundState);
-            lines.push('$varName.Value(static_cast<double>(s_$stateName));');
+            lines.push('$varName.Value(static_cast<double>(s_${cppId(stateName)}));');
             lines.push('$varName.ValueChanged([](winrt::Windows::Foundation::IInspectable const&, winrt_controls::Primitives::RangeBaseValueChangedEventArgs const& e) {');
-            lines.push('    s_$stateName = static_cast<int>(e.NewValue());');
-            lines.push('    notify_$stateName();');
+            lines.push('    s_${cppId(stateName)} = static_cast<int>(e.NewValue());');
+            lines.push('    notify_${cppId(stateName)}();');
             lines.push('});');
             stateBindings.push({
                 stateName: stateName,
                 controlVar: varName,
-                format: '$varName.Value(static_cast<double>(s_$stateName));'
+                format: '$varName.Value(static_cast<double>(s_${cppId(stateName)}));'
             });
         }
 
@@ -729,17 +755,17 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
         var boundState = node.properties.get("boundState");
         if (boundState != null) {
             var stateName = Std.string(boundState);
-            lines.push('$varName.IsChecked(s_$stateName);');
+            lines.push('$varName.IsChecked(s_${cppId(stateName)});');
             lines.push('$varName.Checked([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    s_$stateName = true; notify_$stateName();');
+            lines.push('    s_${cppId(stateName)} = true; notify_${cppId(stateName)}();');
             lines.push('});');
             lines.push('$varName.Unchecked([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    s_$stateName = false; notify_$stateName();');
+            lines.push('    s_${cppId(stateName)} = false; notify_${cppId(stateName)}();');
             lines.push('});');
             stateBindings.push({
                 stateName: stateName,
                 controlVar: varName,
-                format: '$varName.IsChecked(s_$stateName);'
+                format: '$varName.IsChecked(s_${cppId(stateName)});'
             });
         }
 
