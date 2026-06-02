@@ -32,16 +32,36 @@ extern "C" void clw_state_set_bool(const wchar_t* name, int name_len, bool val);
 extern "C" bool clw_state_get_bool(const wchar_t* name, int name_len);
 
 // Convert a UTF-16 buffer to a UTF-8-backed hxcpp ::String.
-// We go through UTF-8 because the `::String(const char16_t*, int)`
-// overload appears to be picked up as `::String(const char*, int)` in
-// our build, which then truncates the wide bytes at the first 0x00.
+//
+// `::String(const char *, int)` in our hxcpp build stores the input
+// pointer verbatim — it does NOT copy the bytes (verified empirically
+// via pointer-equality diag : the returned String\'s `utf8_str()`
+// pointed at the same address as the source std::string\'s `c_str()`).
+//
+// Consequence : a stack-local `std::string` would be freed on function
+// return and the Haxe String would dangle. Most of the time the
+// allocator hadn\'t reused the slot yet so reads looked clean; under
+// load (worker thread doing setString + getString in a tight loop) a
+// wstring allocation from the dispatch path would reuse the slot and
+// the Haxe String would surface as the *name* of whichever field was
+// just set — the source of the "deviceCode" / random-byte URL
+// corruption in CLW-12.
+//
+// Fix : allocate the buffer through `hx::NewGCBytes` so the hxcpp GC
+// tracks it as part of the String\'s reachable graph. As long as the
+// String stays referenced, the buffer survives.
+//
+// We still go through UTF-8 because the `::String(const char16_t*, int)`
+// overload resolves to `::String(const char*, int)` in this build and
+// truncates the wide bytes at the first 0x00.
 static ::String _wui_wide_to_string(const wchar_t* w, int wlen) {
     if (!w || wlen <= 0) return ::String();
     int u8len = WideCharToMultiByte(CP_UTF8, 0, w, wlen, nullptr, 0, nullptr, nullptr);
     if (u8len <= 0) return ::String();
-    std::string u8((size_t)u8len, 0);
-    WideCharToMultiByte(CP_UTF8, 0, w, wlen, &u8[0], u8len, nullptr, nullptr);
-    return ::String(u8.c_str(), u8len);
+    char* gcBuf = (char*)hx::NewGCBytes(nullptr, u8len + 1);
+    WideCharToMultiByte(CP_UTF8, 0, w, wlen, gcBuf, u8len, nullptr, nullptr);
+    gcBuf[u8len] = 0;
+    return ::String((const char*)gcBuf, u8len);
 }
 ')
 class StateBridge {
@@ -51,7 +71,7 @@ class StateBridge {
 
     public static function getString(name:String):String {
         var result:String = "";
-        untyped __cpp__('const wchar_t* _buf; int _len; clw_state_get_string(reinterpret_cast<const wchar_t*>(({0}).wc_str()), ({0}).length, &_buf, &_len); {1} = _wui_wide_to_string(_buf, _len);', name, result);
+        untyped __cpp__('const wchar_t* _buf = nullptr; int _len = 0; clw_state_get_string(reinterpret_cast<const wchar_t*>(({0}).wc_str()), ({0}).length, &_buf, &_len); {1} = _wui_wide_to_string(_buf, _len);', name, result);
         return result;
     }
 
