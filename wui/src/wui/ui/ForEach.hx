@@ -76,20 +76,50 @@ class ForEach extends View {
 
         lambdaBody = unwrapReturnAndBlock(lambdaBody);
 
-        // Phase 3 — si le template est `new UserComponent(...)`, on
-        // inline son body() avec les ctor args substitués pour les
-        // refs `this.<field>`. Le résultat doit toujours être un
-        // HStack/VStack pour matcher le shape MVP supporté.
-        switch (lambdaBody.expr) {
-            case TNew(clsRef, _, newArgs):
-                var cls = clsRef.get();
-                var fullName = cls.pack.join(".") + (cls.pack.length > 0 ? "." : "") + cls.name;
-                if (fullName != "wui.ui.HStack" && fullName != "wui.ui.VStack"
-                    && wui.macros.WinUIGenerator.isUserViewComponent(cls)) {
-                    var inlined = wui.macros.WinUIGenerator.inlineUserBodyExpr(cls, newArgs);
-                    if (inlined != null) lambdaBody = unwrapReturnAndBlock(inlined);
-                }
-            default:
+        // Drill down through any TCall modifier chain on the template
+        // root AND through Phase 3 user-component inlining, in a single
+        // loop. Each TCall layer yields one modifier we'll apply to the
+        // row container in wuiEmit ; each TNew(UserComponent) triggers
+        // an inline pass that may itself produce more TCalls (the
+        // component's body may have its own `.padding()` etc.). After
+        // the loop, `lambdaBody` should be a `TNew(HStack/VStack, …)`
+        // — that's the row's panel orientation + children.
+        var rowModifiers:Array<wui.macros.UIBuilder.ModifierData> = [];
+        var walking = true;
+        while (walking) {
+            walking = false;
+            switch (lambdaBody.expr) {
+                case TCall(func, callArgs):
+                    switch (func.expr) {
+                        case TField(obj, fa):
+                            var fieldName = switch (fa) {
+                                case FInstance(_, _, cf): cf.get().name;
+                                case FStatic(_, cf): cf.get().name;
+                                case FAnon(cf): cf.get().name;
+                                case FClosure(_, cf): cf.get().name;
+                                default: null;
+                            };
+                            if (fieldName != null) {
+                                var mod = wui.macros.WinUIGenerator.modifierFromCall(fieldName, callArgs);
+                                if (mod != null) rowModifiers.unshift(mod);
+                            }
+                            lambdaBody = obj;
+                            walking = true;
+                        default:
+                    }
+                case TNew(clsRef, _, newArgs):
+                    var cls = clsRef.get();
+                    var fullName = cls.pack.join(".") + (cls.pack.length > 0 ? "." : "") + cls.name;
+                    if (fullName != "wui.ui.HStack" && fullName != "wui.ui.VStack"
+                        && wui.macros.WinUIGenerator.isUserViewComponent(cls)) {
+                        var inlined = wui.macros.WinUIGenerator.inlineUserBodyExpr(cls, newArgs);
+                        if (inlined != null) {
+                            lambdaBody = unwrapReturnAndBlock(inlined);
+                            walking = true;
+                        }
+                    }
+                default:
+            }
         }
 
         var rowOrientation = "Horizontal";
@@ -129,6 +159,7 @@ class ForEach extends View {
         props.set("foreachVersionKey", versionKey);
         props.set("foreachRowOrientation", rowOrientation);
         props.set("foreachChildSpecs", childSpecs);
+        if (rowModifiers.length > 0) props.set("foreachRowModifiers", rowModifiers);
         return { viewType: "ForEach", children: [], modifiers: [], properties: props };
     }
 
@@ -159,12 +190,20 @@ class ForEach extends View {
         var childSpecs:Array<Dynamic> = cast node.properties.get("foreachChildSpecs");
         if (childSpecs == null) childSpecs = [];
 
+        var rowModsAny:Dynamic = node.properties.get("foreachRowModifiers");
+        var rowMods:Array<wui.macros.UIBuilder.ModifierData> =
+            rowModsAny != null ? cast rowModsAny : [];
+
         ctx.lines.push('std::function<void()> $rebuildVar = [$panelVar]() {');
         ctx.lines.push('    $panelVar.Children().Clear();');
         ctx.lines.push('    int _count = ::wui::generated::ForEachAccessor_obj::${stateName}_length();');
         ctx.lines.push('    for (int i = 0; i < _count; i++) {');
         ctx.lines.push('        winrt_controls::StackPanel _row;');
         ctx.lines.push('        _row.Orientation(winrt_controls::Orientation::$rowOrientation);');
+        // Modifiers chainés sur la racine du template lambda (collectés
+        // par wuiAnalyze en walkant la TCall chain). Appliqués au row
+        // container — Tapped (via .onTap), Padding, Background, etc.
+        if (rowMods.length > 0) ctx.applyModifiers("_row", "StackPanel", rowMods);
 
         for (spec in childSpecs) {
             var kind:String = spec.kind;

@@ -233,12 +233,13 @@ and `ForEach` knows nothing about it.
 | Override `body()` to return a tree of primitives | Have constructor args that aren't directly assigned to a same-named field (no transforms in the ctor) |
 | Take any number of constructor args | Declare new `@:state` inside a component — the state must live on the App |
 | Take `State<T>` references and bind them via `TextBox`, `Text`, `Slider`, … | Be used inside another component's `effects()` (effects belong to the App) |
-| Use other components inside `body()` (composition is recursive) | Stack modifiers on the component **inside a ForEach template** — modifiers on the template root aren't propagated to the row container yet. Modifiers in non-ForEach contexts work normally. |
-| Attach interaction via the standard modifier chain : `new MyComponent(...).onTap(StateAction.Custom(fn)).padding(8)` — the modifiers apply to the inlined root, just like on a primitive | |
+| Use other components inside `body()` (composition is recursive) | Receive the per-row index when used as a `ForEach` template root (the lambda's index param isn't surfaced yet) |
+| Stack modifiers — `.padding(8)`, `.background(...)`, `.onTap(StateAction.Custom(fn))` — at the call site. They apply to the inlined root, on a primitive or inside a `ForEach` template. | |
 
 The list is short on purpose — Phase 3 deliberately ships the minimum that
-unblocks composition. ForEach template-root modifier propagation and
-richer constructor patterns are tracked in the WUI roadmap.
+unblocks composition. Surfacing the per-row index inside the ForEach
+template lambda and richer constructor patterns are tracked in the WUI
+roadmap.
 
 The list is short on purpose — Phase 3 deliberately ships the minimum that
 unblocks composition. Modifier chains on the component, an `effects()` hook

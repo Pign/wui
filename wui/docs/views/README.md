@@ -442,17 +442,28 @@ bindings).
 ### Row interaction
 
 Row-tap handlers go through the generic [`.onTap(StateAction)`](#interaction)
-modifier on the row View — same modifier you'd use on any other widget.
-The per-row index isn't exposed to the template lambda yet, so the action's
-target has to be something the row can derive from its own data (e.g.
-`StateAction.SetValue(detailId, todo.id)` reads the row's id at codegen
-time). Surfacing the index to the lambda is a tracked follow-up.
+modifier on the row View — same modifier you'd use on any other widget :
 
-> **Known gap** — modifiers stacked on the template root (`(item) ->
-> new MyRow(...).onTap(...)`) don't propagate to the row container yet
-> in the current ForEach implementation. For now, attach `.onTap` on a
-> wrapping primitive inside the template, or wait for the propagation
-> pass.
+```haxe
+new ForEach(todos, (todo:Todo) ->
+    new TodoRow(todo.label, todo.meta)
+        .onTap(StateAction.Custom(MyApp.handleRowTap))
+)
+```
+
+ForEach's analyzer walks the TCall modifier chain stacked on the template
+root, collects each modifier, and applies them to the row container in
+the generated rebuild loop. `.padding(8)`, `.background(...)`, `.onTap(...)`,
+… all reach the per-row `_row` StackPanel via the same `applyModifiers`
+pass the rest of the framework uses.
+
+> **Known gap** — the per-row index isn't exposed to the template lambda
+> yet, so an action like `StateAction.SetValue(selectedIdx, <index>)`
+> doesn't have an `<index>` to reference. Workarounds : derive a target
+> value from the row's own data (`StateAction.SetValue(detailId, todo.id)`
+> if `todo.id` resolves at codegen) or route through a static
+> `StateAction.Custom(fn)` that decides what to do server-side.
+> Surfacing the index to the lambda is the next chunk.
 
 The full background — Immutable triggers, accessor codegen, why the list
 never crosses the bridge — is in [Immutable state](../state/immutable.md).
