@@ -399,37 +399,87 @@ Severity values: `Informational`, `Success`, `Warning`, `Error`.
 
 ## ForEach
 
-Repeats a view template for each item in a collection.
+Repeats a view template for each item in a collection. Bound to a
+[`@:state` Immutable](../state/immutable.md) field — the codegen subscribes
+to the field's `<name>__v` trigger and rebuilds the row panel on every
+replacement of the underlying list.
 
 ```haxe
-new ForEach(items:Dynamic, template:Dynamic -> View)
+new ForEach(items:Dynamic, template:Item -> View, ?tapSelect:Dynamic)
 ```
 
 ```haxe
-new ForEach(names, (name) -> new Text(name).padding())
+@:state var todos:ImmutableList<Todo> = ImmutableList.empty();
+@:state var selectedIdx:Int = -1;
+
+new ForEach(todos, (todo:Todo) -> new VStack([
+    new Text(todo.label).font(BodyStrong),
+    new Text(todo.meta).foregroundColor(brand.muted()),
+]), selectedIdx)
 ```
 
-Use this to dynamically generate views from an array or state-bound collection.
+What the macro guarantees :
+
+- The `items` argument must be a `@:state` field whose type implements
+  `wui.state.Immutable` (typically an `ImmutableList<T>`). Anything else
+  fails analysis with a warning pointing at the call.
+- The `template` lambda must be a single expression returning either an
+  `HStack` / `VStack` (MVP) or a [user component](components.md) — in the
+  component case the macro inlines the component's `body()` and applies
+  the same rules below.
+- Each row child must be `new Text(<literal>)` or
+  `new Text(<lambdaParam>.<field>)`. Modifier chains on those Texts
+  (`.font(...)`, `.foregroundColor(...)`, `.bold()`, …) are honoured — the
+  ForEach analyzer walks the call chain and applies each modifier to the
+  per-row `TextBlock`.
+- The optional `tapSelect` argument is a `@:state` field reference of
+  type `Int`. When set, every row gets a `Tapped` handler that writes its
+  index into that field and notifies — useful for hooking a detail view
+  via `Effect.run` on the selection.
+
+The generated code emits a vertical StackPanel, a `std::function<void()>`
+rebuild closure that pulls the current row count and each per-field value
+through `wui.generated.ForEachAccessor` (Haxe-side), and a listener on
+`s_<items>__v_listeners` that re-runs the closure via
+`DispatcherQueue.TryEnqueue` (same re-entrance pattern as other state
+bindings).
+
+The full background — Immutable triggers, accessor codegen, why the list
+never crosses the bridge — is in [Immutable state](../state/immutable.md).
 
 ---
 
-## ConditionalView
+## Show
 
-Shows or hides content based on a condition.
+Visibility gate keyed on a `@:state Bool`. Both branches are emitted into
+the XAML tree at compile time ; only the `Visibility` property flips
+between `Visible` and `Collapsed` at runtime — no rebuild.
 
 ```haxe
-new ConditionalView(condition:Dynamic, thenView:View, ?elseView:View)
+new Show(when:Dynamic, child:View)
 ```
 
 ```haxe
-new ConditionalView(
-    isLoggedIn,
-    new Text("Welcome back!"),
-    new Button("Log in")
-)
+@:state var isConnected:Bool = false;
+@:state var isLoginShown:Bool = true;
+
+new VStack([
+    new Show(isLoginShown,  new LoginScreen(...)),
+    new Show(isConnected,   new MainScreen(...)),
+])
 ```
 
-When `condition` is a `State<Bool>`, the view swaps automatically when the state changes. The `elseView` is optional -- omit it to show nothing when the condition is false.
+The `when` argument is a `@:state Bool` field reference. Maps to a WinUI
+`ContentControl` whose `Visibility` is bound to the state.
+
+Use it for screen-level routing (login → app) and conditional sub-sections
+where the inner tree is static. For content that depends on which item in
+a list is selected, use a per-row [`Effect.run`](../state/README.md#effect)
+instead.
+
+Negation isn't supported directly — `new Show(!isConnected, ...)` won't
+analyse. Declare a companion `@:state` and flip both flags together
+(typical pattern for two-screen apps).
 
 ---
 
@@ -457,5 +507,5 @@ When `condition` is a `State<Bool>`, the view swaps automatically when the state
 | `TabView` | `TabView` | Tabbed interface |
 | `Expander` | `Expander` | Collapsible section |
 | `InfoBar` | `InfoBar` | Notification bar |
-| `ForEach` | _(dynamic)_ | Collection iteration |
-| `ConditionalView` | _(dynamic)_ | Conditional rendering |
+| `ForEach` | `StackPanel` + dynamic rows | Reactive collection iteration |
+| `Show` | `ContentControl` | Visibility gate on a `@:state Bool` |

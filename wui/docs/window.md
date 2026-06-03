@@ -8,7 +8,7 @@ For reactivity, combine `wui.Window` with [`wui.Effect`](state/README.md#effect)
 override function effects():Void {
     Effect.run(() -> {
         var n = StateBridge.getInt("unreadCount");
-        Window.setTitle('Inbox ($n) — Courrier Libre');
+        Window.setTitle('Unread ($n) — MyApp');
     }, [unreadCount]);
 }
 ```
@@ -29,7 +29,7 @@ The OS-level window title. Shown in:
 - The system caption bar (only when `titleBar()` returns `null`)
 
 ```haxe
-override function appName():String return "Courrier Libre";
+override function appName():String return "MyApp";
 ```
 
 Defaults to the Haxe class name. The macro reads the literal string off the `return` expression, so anything else falls through to the class name. Compute-then-return-a-variable patterns are intentionally not supported here — use `Window.setTitle()` from `effects()` instead.
@@ -48,7 +48,7 @@ override function backdrop():Backdrop return Acrylic;
 
 | Value | Effect | Cost | Typical use |
 |-------|--------|------|-------------|
-| `Mica` *(default)* | Wallpaper-tinted opaque surface | Low | Long-lived windows (mail, settings) |
+| `Mica` *(default)* | Wallpaper-tinted opaque surface | Low | Long-lived windows (editor, settings) |
 | `MicaAlt` | Mica with higher contrast (BaseAlt variant) | Low | Dense text/charts that need readable bg |
 | `Acrylic` | Heavy blur with noise (task-pane feel) | Higher | Transient surfaces — flyouts, sidebars |
 | `None` | Opaque system page background | None | Picked when you set a solid `.background()` on the root yourself |
@@ -62,7 +62,7 @@ Replace the system caption bar with a custom view tree — File Explorer / Edge 
 ```haxe
 override function titleBar():View {
     return new HStack([
-        new Text("Courrier Libre")
+        new Text("MyApp")
             .font(BodyStrong)
             .foregroundColor(primary()),
         new Spacer(),
@@ -84,13 +84,13 @@ Interactive widgets tracked for passthrough: `Button`, `TextBox`, `ComboBox`, `S
 
 ## `wui.Window` — imperative API
 
-Calls into extern "C" bridges defined in `App.cpp`. Every call is marshalled onto the UI thread (`runOnUIThread`), so it's safe to invoke from a worker thread (e.g. an OIDC poll loop or a JSON-RPC handler).
+Calls into extern "C" bridges defined in `App.cpp`. Every call is marshalled onto the UI thread (`runOnUIThread`), so it's safe to invoke from a worker thread (e.g. a long-poll loop or a JSON-RPC handler).
 
 ```haxe
 import wui.Window;
 import wui.Backdrop;
 
-Window.setTitle("Inbox — Courrier Libre");
+Window.setTitle("Some computed value");
 Window.setBackdrop(Acrylic);
 ```
 
@@ -110,23 +110,23 @@ The `wui.Effect.run(fn, deps)` primitive is the bridge from `@:state` reactivity
 ```haxe
 class MyApp extends wui.App {
     @:state var unreadCount:Int = 0;
-    @:state var currentFolder:String = "Inbox";
+    @:state var currentSection:String = "Home";
 
-    override function appName():String return "Courrier Libre";
+    override function appName():String return "MyApp";
 
     override function effects():Void {
         Effect.run(() -> {
-            var folder = StateBridge.getString("currentFolder");
+            var section = StateBridge.getString("currentSection");
             var n = StateBridge.getInt("unreadCount");
             Window.setTitle(n > 0
-                ? '$folder ($n) — Courrier Libre'
-                : '$folder — Courrier Libre');
-        }, [unreadCount, currentFolder]);
+                ? '$section ($n) — MyApp'
+                : '$section — MyApp');
+        }, [unreadCount, currentSection]);
     }
 }
 ```
 
-The deps are typed refs (`[unreadCount, currentFolder]`) rather than strings — typos become compile errors and rename refactors carry through. See [Effect](state/README.md#effect) for the full reference.
+The deps are typed refs (`[unreadCount, currentSection]`) rather than strings — typos become compile errors and rename refactors carry through. See [Effect](state/README.md#effect) for the full reference.
 
 ---
 

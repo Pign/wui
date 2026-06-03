@@ -2,10 +2,16 @@
 - Getting Started
   - [Installation & Setup](getting-started.md)
 - Guide
-  - [Views](views/README.md)
+  - Views
+    - [Built-in widgets](views/README.md)
+    - [Creating reusable components](views/components.md)
   - [Modifiers](modifiers.md)
-  - [State Management](state/README.md)
+  - State
+    - [State management](state/README.md)
+    - [Immutable state](state/immutable.md)
   - [Window (title, backdrop, title bar)](window.md)
+- Extending
+  - [Adding a native primitive](extending/primitives.md)
 - Reference
   - [CLI](cli.md)
   - [Architecture](architecture.md)

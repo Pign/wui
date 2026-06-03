@@ -103,19 +103,20 @@ You then use `count.value`, `count.inc(1)`, etc. in your `body()`.
 
 1. A primitive: `String`, `Int`, `Float`, `Bool`
 2. A class extending [`wui.state.Observable`](#observable) — for composite state with field-level reactivity
+3. A class implementing [`wui.state.Immutable`](immutable.md) — for value-replacement composites (`ImmutableList<T>` and friends)
 
-Anything else (a `typedef`, `Array<T>`, a class without `Observable`, a `Map`, etc.) is rejected:
+Anything else (a `typedef`, plain `Array<T>`, a `Map`, a class with none of the markers) is rejected at compile time:
 
 ```
-@:state var inbox:Array<Email> = [];
-                ^^^^^^^^^^^^
-@:state var inbox:T — type must be a primitive (String/Int/Float/Bool)
-or extend wui.state.Observable.
+@:state var items:Array<Thing> = [];
+                ^^^^^^^^^^^^^
+@:state var items:T — type must be a primitive (String/Int/Float/Bool),
+extend wui.state.Observable, or implement wui.state.Immutable.
 ```
 
-The rule keeps the bridge layer honest: every reactive cell lives in C++ as a primitive (or a primitive decomposed from an Observable's fields), and the framework never has to marshal opaque Haxe objects across language boundaries.
+The rule keeps the bridge layer honest: every reactive cell either lives in C++ as a primitive, is a primitive decomposed from an Observable's fields, or has a small `Int` trigger paired with a Haxe-side payload (Immutable). The framework never marshals opaque Haxe objects across language boundaries.
 
-Planned but not yet eligible: nullary enums (will be stored as `int` via the index), and a marker interface for value-replacement composites like `ImmutableList<T>`.
+Planned but not yet eligible: nullary enums (will be stored as `int` via the index).
 
 ---
 
@@ -215,9 +216,41 @@ Not yet wired:
   (`searchQuery.value`) still work through the existing rewrite.
 - Composite refs in `Effect.run` deps (`[settings.darkMode]`). Pass the
   composite key as a string for now (`["settings.darkMode"]`).
-- Inbox-style `Array<Observable>` — out of scope for `Observable`
-  itself; tracked under a separate `Immutable` marker (see the
-  type-rule "planned" note above).
+
+> **Observable is for field-level reactivity over a known set of fields.**
+> For a reactive *collection* (list, set, map) or for a value type you
+> replace wholesale (snapshot, record, config), reach for
+> [`wui.state.Immutable`](immutable.md) instead. The Observable path's
+> "decompose into per-field bridge entries" model has no answer for "the
+> shape itself changes".
+
+---
+
+## Immutable
+
+The third eligible shape — value-replacement reactivity. The payload lives
+Haxe-side (a regular reference in `State<T>._value`), and only a small
+`Int` trigger crosses the bridge to wake up subscribers like
+[`ForEach`](../views/README.md#foreach). The included citizen is
+`ImmutableList<T>` ; you can implement the marker on your own value types.
+
+```haxe
+@:state var todos:ImmutableList<Todo> = ImmutableList.empty();
+
+// Mutate via the immutable API ; State<T>.set_value bumps the bridge
+// trigger, the ForEach subscribed to it rebuilds.
+todos.value = todos.value.cons(newTodo);
+```
+
+The full guide — payload semantics, ForEach wiring, custom Immutable types,
+the `set_value` Reflect detour on hxcpp — is in
+[Immutable state](immutable.md). The TL;DR :
+
+| | Primitive | Observable | Immutable |
+|---|---|---|---|
+| Bridge entries | one per field | one per nested primitive (dotted key) | one trigger `Int` per field (`<name>__v`) |
+| Payload lives | C++ | C++ (decomposed) | Haxe |
+| When to reach for it | scalar reactive value | grouped scalar fields | reactive collection or whole-value replacement |
 
 ---
 
@@ -324,36 +357,36 @@ Under the hood, `UIBuilder` emits `extern "C" clw_state_{set,get}_{string,int,do
 
 Unknown names are silently ignored on `set` and return type defaults on `get`.
 
-### Threading caveat
+### Threading notes
 
 `Sys.println`, `haxe.Http`, and `StateBridge` all work fine on a `sys.thread.Thread.create` worker.
 
-But **passing Haxe heap objects through a closure capture, a static field, or even `sys.thread.Deque` into the worker** is non-deterministic on hxcpp 4.3 — sometimes the value arrives intact, sometimes you see a one-character + NUL truncation, sometimes pure garbage. The Deque storage is GC-aware (extends `Array_obj<Dynamic>` with a proper `__Visit`), so the issue isn't simply a missing root — investigation in progress.
+Passing Haxe heap objects across the thread boundary works the same way it does in any other hxcpp program. The infamous "Haxe String comes out as garbage on a worker" symptom was traced to a bridge-side bug (`::String(const char*, int)` was storing the buffer pointer without copying — fixed by routing through `hx::NewGCBytes`). If you see anything that resembles that pattern in a new bridge you're writing — first read works, second read mangled, GC pressure makes it worse — it's almost certainly the same root cause ; check the C++ side for a freed source buffer.
 
-The robust pattern is to **avoid crossing the thread boundary with Haxe objects entirely**: have the worker call back into the C++ side via `StateBridge.getX` for any state it needs.
+The conservative pattern, if you don't need to share live Haxe state between threads, is to **let the worker read state through `StateBridge.getX(...)`** rather than capturing a Haxe value into the closure :
 
 ```haxe
-public static function startLogin():Void {
-    StateBridge.setString("loginStatus", "Démarrage…");
+public static function startWork():Void {
+    StateBridge.setString("status", "Démarrage…");
     sys.thread.Thread.create(_runWorker);
 }
 
 static function _runWorker():Void {
-    // Worker reads serverUrl directly from the C++ static via the
-    // dispatch — no Haxe heap object crosses the boundary.
+    // Worker reads the server URL through the bridge — no captured
+    // Haxe object, just a wstring lookup.
     var server = StateBridge.getString("serverUrl");
     // … network IO, then StateBridge.setString to publish results.
 }
 ```
 
-This sidesteps the bug for the common "worker needs to know app state" case. A proper hxcpp-level fix is tracked separately.
+It's not required, just predictable.
 
 ### Lambda capture limitations summary
 
 | Pattern | Captures work? |
 | --- | --- |
 | Closure built and called on the same thread, in a normal runtime function | ✅ |
-| Closure passed to `Thread.create` | ❌ — flaky, see above |
+| Closure passed to `Thread.create` | ✅ (hxcpp GC-tracks captured locals) |
 | Lambda passed to `StateAction.Custom(() -> {...})` inside `body()` | ❌ — `body()` is compile-time only; the lifted lambda has no closure scope |
 
 ---
@@ -372,7 +405,7 @@ class MyApp extends wui.App {
     override function effects():Void {
         Effect.run(() -> {
             var n = StateBridge.getInt("unreadCount");
-            Window.setTitle('Inbox ($n) — Courrier Libre');
+            Window.setTitle('Unread ($n) — MyApp');
         }, [unreadCount]);
     }
 }
@@ -546,7 +579,7 @@ import wui.state.StateAction;
 import wui.state.StateBridge;
 
 class App extends wui.App {
-    @:state var serverUrl:String = "https://mail.example.com";
+    @:state var serverUrl:String = "https://api.example.com";
     @:state var userCode:String = "";
     @:state var loginStatus:String = "Pas encore connecté";
 
