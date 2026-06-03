@@ -442,28 +442,53 @@ bindings).
 ### Row interaction
 
 Row-tap handlers go through the generic [`.onTap(StateAction)`](#interaction)
-modifier on the row View — same modifier you'd use on any other widget :
+modifier on the row View — same modifier you'd use on any other widget.
+The ForEach lambda accepts an optional **second parameter** for the row
+index, which the framework materialises from the C++ `for`-loop counter
+at runtime :
 
 ```haxe
-new ForEach(todos, (todo:Todo) ->
+new ForEach(todos, (todo:Todo, idx:Int) ->
     new TodoRow(todo.label, todo.meta)
         .onTap(StateAction.Custom(MyApp.handleRowTap))
+        //                       ^^^^^^^^^^^^^^^^^^^^
+        //                       typed `(Int) -> Void` static
 )
 ```
 
-ForEach's analyzer walks the TCall modifier chain stacked on the template
-root, collects each modifier, and applies them to the row container in
-the generated rebuild loop. `.padding(8)`, `.background(...)`, `.onTap(...)`,
-… all reach the per-row `_row` StackPanel via the same `applyModifiers`
-pass the rest of the framework uses.
+Inside `Custom`, either form works :
 
-> **Known gap** — the per-row index isn't exposed to the template lambda
-> yet, so an action like `StateAction.SetValue(selectedIdx, <index>)`
-> doesn't have an `<index>` to reference. Workarounds : derive a target
-> value from the row's own data (`StateAction.SetValue(detailId, todo.id)`
-> if `todo.id` resolves at codegen) or route through a static
-> `StateAction.Custom(fn)` that decides what to do server-side.
-> Surfacing the index to the lambda is the next chunk.
+```haxe
+// Form A — typed callback. `MyApp.handleRowTap` is `(Int) -> Void`.
+//   The macro detects the signature and routes through a parametric
+//   wrapper in `wui.generated.Callbacks` that takes the row index.
+.onTap(StateAction.Custom(MyApp.handleRowTap))
+
+// Form B — closure with capture of the lambda's index param. The
+//   typed closure body is converted to an untyped Expr (via
+//   `closureBodyToExpr`) and re-typed inside the generated wrapper
+//   where `idx:Int` is the parameter — references to the ForEach
+//   lambda's index local resolve there.
+.onTap(StateAction.Custom(() -> {
+    var rank = idx + 1;
+    StateBridge.setString("status", 'Row #$rank clicked');
+    MyApp.handleRowTap(idx);
+}))
+```
+
+Both compile to the same C++ shape : a parametric `Callbacks` wrapper
+invoked from `_row.Tapped([i](...) { Callbacks_obj::wui_cb_<N>(i); })`.
+
+> **Closure conversion limits** — the body is walked via the
+> `closureBodyToExpr` pass which handles common shapes (TCall, TField,
+> TConst, TBinop, TUnop, TIf, TBlock, TVar, TArrayDecl, TObjectDecl,
+> TNew, TBreak, TContinue, TThrow, TReturn, TParenthesis, TMeta, TLocal
+> idx-capture). Unsupported : `switch`/`try`/`for`/`while` in the
+> closure body, and **captures of locals other than the index** (the
+> row's `item` and its fields aren't surfaced yet — capturing
+> `item.id` from inside the closure fails to compile). For row data
+> the framework already wires per-field accessors at render time ;
+> exposing them in the closure conversion is a tracked follow-up.
 
 The full background — Immutable triggers, accessor codegen, why the list
 never crosses the bridge — is in [Immutable state](../state/immutable.md).

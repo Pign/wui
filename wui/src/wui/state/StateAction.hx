@@ -31,8 +31,14 @@ enum StateAction {
     /** Remove a value from an array state. */
     Remove(state:Dynamic, value:Dynamic);
 
-    /** Execute a custom callback. */
-    Custom(callback:() -> Void);
+    /** Execute a custom callback. The signature is `Dynamic` so the
+        action vocabulary stays open to both the standard `() -> Void`
+        form and parametric variants like `(Int) -> Void` that the
+        macro routes through specialised wrappers (e.g. ForEach row
+        taps where the index is supplied at runtime). The macro
+        validates the actual signature at compile time and emits a
+        clear error if it doesn't match a supported shape. */
+    Custom(callback:Dynamic);
 
     /** Wrap an action with animation. */
     Animated(action:StateAction, curve:AnimationCurve);

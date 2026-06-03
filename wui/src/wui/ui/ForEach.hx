@@ -30,7 +30,7 @@ import wui.macros.PrimitiveCtx;
  */
 @:wuiPrimitive
 class ForEach extends View {
-    public function new(items:Dynamic, template:Dynamic -> View) {
+    public function new(items:Dynamic, template:Dynamic) {
         super("ForEach");
         properties.set("items", items);
         properties.set("template", template);
@@ -63,13 +63,20 @@ class ForEach extends View {
         }
 
         var lambdaParamName:String = null;
+        var lambdaIdxName:String = null;
         var lambdaBody:TypedExpr = null;
         switch (args[1].expr) {
             case TFunction(tf):
                 if (tf.args.length > 0) lambdaParamName = tf.args[0].v.name;
+                // Optional second arg = row index. When provided, the
+                // ForEach codegen routes typed `(Int) -> Void` Custom
+                // callbacks (and direct `idx` references in the future)
+                // through a parametric wrapper that receives the C++
+                // loop counter at runtime.
+                if (tf.args.length > 1) lambdaIdxName = tf.args[1].v.name;
                 lambdaBody = tf.expr;
             default:
-                Context.warning("ForEach: second argument must be a lambda `(item) -> view`", Context.currentPos());
+                Context.warning("ForEach: second argument must be a lambda `(item) -> view` or `(item, idx) -> view`", Context.currentPos());
                 return ctx.defaultNode();
         }
         if (lambdaBody == null || lambdaParamName == null) return ctx.defaultNode();
@@ -84,7 +91,15 @@ class ForEach extends View {
         // component's body may have its own `.padding()` etc.). After
         // the loop, `lambdaBody` should be a `TNew(HStack/VStack, …)`
         // — that's the row's panel orientation + children.
+        //
+        // We set `foreachContextIdxName` on WinUIGenerator for the
+        // duration of the walk so `extractStateAction` (reached
+        // transitively from `modifierFromCall` for `.onTap(...)`) can
+        // route typed `(Int) -> Void` Custom callbacks through the
+        // parametric wrapper path. Reset right after.
         var rowModifiers:Array<wui.macros.UIBuilder.ModifierData> = [];
+        var prevForeachIdx = wui.macros.WinUIGenerator.foreachContextIdxName;
+        wui.macros.WinUIGenerator.foreachContextIdxName = lambdaIdxName;
         var walking = true;
         while (walking) {
             walking = false;
@@ -121,6 +136,7 @@ class ForEach extends View {
                 default:
             }
         }
+        wui.macros.WinUIGenerator.foreachContextIdxName = prevForeachIdx;
 
         var rowOrientation = "Horizontal";
         var childExprs:Array<TypedExpr> = [];
@@ -201,9 +217,23 @@ class ForEach extends View {
         ctx.lines.push('        winrt_controls::StackPanel _row;');
         ctx.lines.push('        _row.Orientation(winrt_controls::Orientation::$rowOrientation);');
         // Modifiers chainés sur la racine du template lambda (collectés
-        // par wuiAnalyze en walkant la TCall chain). Appliqués au row
-        // container — Tapped (via .onTap), Padding, Background, etc.
-        if (rowMods.length > 0) ctx.applyModifiers("_row", "StackPanel", rowMods);
+        // par wuiAnalyze en walkant la TCall chain). Le OnTap est
+        // traité à part parce que son snippet peut référencer `i` (le
+        // loop counter de la boucle row) — le Tapped handler doit donc
+        // capturer `[i]` explicitement. Les autres modifiers (padding,
+        // background, etc.) passent par le chemin standard.
+        var rowTapSnippets:Array<String> = [];
+        var rowOtherMods:Array<wui.macros.UIBuilder.ModifierData> = [];
+        for (m in rowMods) {
+            if (m.type == "OnTap") rowTapSnippets.push(Std.string(m.values[0]));
+            else rowOtherMods.push(m);
+        }
+        if (rowOtherMods.length > 0) ctx.applyModifiers("_row", "StackPanel", rowOtherMods);
+        for (snippet in rowTapSnippets) {
+            ctx.lines.push('        _row.Tapped([i](winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::Input::TappedRoutedEventArgs const&) {');
+            ctx.lines.push('            $snippet');
+            ctx.lines.push('        });');
+        }
 
         for (spec in childSpecs) {
             var kind:String = spec.kind;

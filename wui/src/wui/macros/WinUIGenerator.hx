@@ -40,6 +40,28 @@ class WinUIGenerator {
         is a plain list. Names are unique within the build. */
     static var lambdaRegistry:Array<{name:String, body:haxe.macro.Type.TypedExpr}> = [];
 
+    /** Parametric callbacks — `StateAction.Custom(fn)` where `fn` is a
+        typed `(Int) -> Void` static reference. Only emitted in ForEach
+        row context (the index is materialised from the C++ for-loop's
+        `i` and passed to the wrapper). Keyed by the static function
+        path to keep wrappers idempotent across multiple identical
+        registrations. */
+    static var parametricCallbackRegistry:Map<String, String> = new Map();
+
+    /** Parametric closures — `StateAction.Custom(() -> { … idx … })`
+        where the closure body is converted to an untyped Expr via
+        `closureBodyToExpr`, capturing the ForEach row index as the
+        wrapper's `idx:Int` parameter. Non-idempotent (each closure
+        carries its own body), so this is a flat list. */
+    static var parametricLambdaRegistry:Array<{name:String, body:haxe.macro.Expr}> = [];
+
+    /** Set by `ForEach.wuiAnalyze` for the duration of its modifier
+        walk to the index-param name of the lambda (e.g. "idx" in
+        `(item, idx) -> …`). Null outside ForEach context. Read by
+        `extractStateAction` to decide whether to route a Custom
+        callback through the parametric path. */
+    public static var foreachContextIdxName:Null<String> = null;
+
     /** Accessors needed by emitted ForEach widgets — one entry per
         unique (stateName, fieldName) pair. Each gets a static method on
         `wui.generated.ForEachAccessor`: `<state>_field_<field>(i:Int):String`
@@ -1421,6 +1443,16 @@ class WinUIGenerator {
                                 // Phase 1: static function reference.
                                 var path = extractStaticFunctionPath(arg);
                                 if (path != null) {
+                                    // In ForEach row context, a typed
+                                    // `(Int) -> Void` static reference
+                                    // gets routed through the parametric
+                                    // wrapper — the C++ side captures
+                                    // the row index from the rebuild
+                                    // loop and passes it through.
+                                    if (foreachContextIdxName != null && isIntToVoidFn(arg)) {
+                                        var wrapperName = registerParametricCallback(path);
+                                        return '::wui::generated::Callbacks_obj::$wrapperName(i);';
+                                    }
                                     var wrapperName = registerCallback(path);
                                     return '::wui::generated::Callbacks_obj::$wrapperName();';
                                 }
@@ -1432,6 +1464,31 @@ class WinUIGenerator {
                                 // refs don't survive the lift to static).
                                 switch (arg.expr) {
                                     case TFunction(tf):
+                                        // In ForEach context, convert
+                                        // the closure body to an
+                                        // untyped Expr that re-types
+                                        // cleanly inside a generated
+                                        // wrapper with `idx:Int` as
+                                        // its parameter — references
+                                        // to the ForEach lambda's
+                                        // index local get rewritten
+                                        // to `idx` and resolve to the
+                                        // param. Handles common Haxe
+                                        // shapes (TBlock, TCall,
+                                        // TIf, TBinop, TVar, …) ;
+                                        // unsupported constructs and
+                                        // captures of non-idx locals
+                                        // fall back to the standard
+                                        // zero-arg lift, which won't
+                                        // compile but at least makes
+                                        // the failure mode explicit.
+                                        if (foreachContextIdxName != null) {
+                                            var asExpr = closureBodyToExpr(tf.expr, foreachContextIdxName);
+                                            if (asExpr != null) {
+                                                var wrapperName = registerParametricLambda(asExpr);
+                                                return '::wui::generated::Callbacks_obj::$wrapperName(i);';
+                                            }
+                                        }
                                         var wrapperName = registerLambda(tf.expr);
                                         return '::wui::generated::Callbacks_obj::$wrapperName();';
                                     default:
@@ -1734,19 +1791,287 @@ class WinUIGenerator {
     static function registerCallback(fnPath:String):String {
         var existing = callbackRegistry.get(fnPath);
         if (existing != null) return existing;
-        var n = Lambda.count(callbackRegistry) + lambdaRegistry.length;
+        var n = nextWrapperIndex();
         var wrapperName = 'wui_cb_$n';
         callbackRegistry.set(fnPath, wrapperName);
+        return wrapperName;
+    }
+
+    /** Same as `registerCallback` but the wrapper takes an `Int` arg
+        and forwards it to the target. Used by ForEach row taps where
+        the C++ side captures the loop index and passes it through. */
+    static function registerParametricCallback(fnPath:String):String {
+        var existing = parametricCallbackRegistry.get(fnPath);
+        if (existing != null) return existing;
+        var n = nextWrapperIndex();
+        var wrapperName = 'wui_cb_$n';
+        parametricCallbackRegistry.set(fnPath, wrapperName);
+        return wrapperName;
+    }
+
+    /** Register an anonymous closure converted via `closureBodyToExpr`.
+        The body is an untyped `Expr` ; Haxe re-types it inside the
+        generated wrapper where `idx:Int` is a function parameter,
+        so references to the ForEach lambda's index local — rewritten
+        to bare `idx` during conversion — resolve correctly. */
+    static function registerParametricLambda(body:haxe.macro.Expr):String {
+        var n = nextWrapperIndex();
+        var wrapperName = 'wui_cb_$n';
+        parametricLambdaRegistry.push({name: wrapperName, body: body});
         return wrapperName;
     }
 
     /** Register an anonymous lambda body; not idempotent (each lambda
         is unique). Returns the generated wrapper name. */
     static function registerLambda(body:haxe.macro.Type.TypedExpr):String {
-        var n = Lambda.count(callbackRegistry) + lambdaRegistry.length;
+        var n = nextWrapperIndex();
         var wrapperName = 'wui_cb_$n';
         lambdaRegistry.push({name: wrapperName, body: body});
         return wrapperName;
+    }
+
+    static function nextWrapperIndex():Int {
+        return Lambda.count(callbackRegistry)
+            + Lambda.count(parametricCallbackRegistry)
+            + lambdaRegistry.length
+            + parametricLambdaRegistry.length;
+    }
+
+    /** True when `expr` is a static function reference typed
+        `(Int) -> Void`. Used by the ForEach Custom-callback path to
+        decide whether to route through the parametric wrapper.
+        Caller has already extracted a static function path via
+        `extractStaticFunctionPath` — this just inspects the type. */
+    static function isIntToVoidFn(expr:TypedExpr):Bool {
+        if (expr == null) return false;
+        switch (expr.t) {
+            case TFun(params, ret):
+                if (params.length != 1) return false;
+                if (!isVoidType(ret)) return false;
+                return isIntType(params[0].t);
+            default:
+                return false;
+        }
+    }
+
+    static function isIntType(t:Type):Bool {
+        switch (t) {
+            case TAbstract(aref, _):
+                var a = aref.get();
+                return a.pack.length == 0 && a.name == "Int";
+            case TType(tref, _):
+                return isIntType(tref.get().type);
+            default:
+                return false;
+        }
+    }
+
+    static function isVoidType(t:Type):Bool {
+        switch (t) {
+            case TAbstract(aref, _):
+                var a = aref.get();
+                return a.pack.length == 0 && a.name == "Void";
+            case TType(tref, _):
+                return isVoidType(tref.get().type);
+            default:
+                return false;
+        }
+    }
+
+    /** Detects the trivial "forwarding closure" pattern :
+            () -> SomeStatic.method(idx)
+        where `idx` is the ForEach lambda's index parameter. Returns
+        the fully-qualified target method path when the pattern
+        matches — caller threads it through `registerParametricCallback`
+        as if the user had written `Custom(SomeStatic.method)` directly.
+        Returns null for any other body shape ; the caller falls back
+        to the regular zero-arg lift (which won't compile if the body
+        captures locals, but that's the existing documented behaviour).
+
+        Why this is enough as a v1 — the canonical use case is :
+            new ForEach(items, (item, idx:Int) ->
+                new MyRow(...).onTap(StateAction.Custom(() -> handleTap(idx)))
+            )
+        which is just sugar over the typed-callback form. Richer
+        closures (multi-statement, multi-call, captures beyond idx)
+        still hit the existing "no closure scope" wall — solving them
+        properly needs a TVar-substituting lift that's deferred. */
+    /** Convert a typed closure body into an untyped `Expr` so it
+        retypes cleanly inside a generated wrapper exposing the row
+        index as an `idx:Int` parameter. References to the ForEach
+        lambda's index local are rewritten as bare `idx` identifiers
+        — when Haxe types the wrapper, they resolve to the param.
+        Returns null when the body uses a construct we don't model
+        (TSwitch, TTry, captures other than `idx`, …). */
+    static function closureBodyToExpr(e:TypedExpr, idxName:String):Null<haxe.macro.Expr> {
+        if (e == null) return null;
+        var pos = e.pos;
+        function mk(def:haxe.macro.Expr.ExprDef):haxe.macro.Expr return { expr: def, pos: pos };
+        switch (e.expr) {
+            case TConst(c):
+                return switch (c) {
+                    case TInt(i):    mk(EConst(CInt(Std.string(i))));
+                    case TFloat(s):  mk(EConst(CFloat(s)));
+                    case TString(s): mk(EConst(CString(s)));
+                    case TBool(b):   mk(EConst(CIdent(b ? "true" : "false")));
+                    case TNull:      mk(EConst(CIdent("null")));
+                    case TThis:      mk(EConst(CIdent("this")));
+                    case TSuper:     mk(EConst(CIdent("super")));
+                };
+            case TLocal(v):
+                // ForEach idx capture → wrapper's `idx` param.
+                // Locals declared inside the closure also carry the
+                // declared name and resolve in the wrapper scope once
+                // their TVar declarations are converted. The user
+                // catches "captured a non-idx local from outside" via
+                // the re-typing error (unknown identifier).
+                if (v.name == idxName) return mk(EConst(CIdent("idx")));
+                return mk(EConst(CIdent(v.name)));
+            case TField(obj, fa):
+                var name = fieldAccessName(fa);
+                if (name == null) return null;
+                switch (fa) {
+                    case FStatic(cl, _):
+                        return staticFieldExpr(cl.get(), name, pos);
+                    case FEnum(en, _):
+                        var path = en.get().pack.copy();
+                        path.push(en.get().name);
+                        return mk(EField(pathToExpr(path, pos), name));
+                    default:
+                        var inner = closureBodyToExpr(obj, idxName);
+                        if (inner == null) return null;
+                        return mk(EField(inner, name));
+                }
+            case TTypeExpr(mt):
+                var path = switch (mt) {
+                    case TClassDecl(c):    c.get().pack.concat([c.get().name]);
+                    case TEnumDecl(en):    en.get().pack.concat([en.get().name]);
+                    case TTypeDecl(t):     t.get().pack.concat([t.get().name]);
+                    case TAbstract(a):     a.get().pack.concat([a.get().name]);
+                };
+                return pathToExpr(path, pos);
+            case TCall(func, args):
+                var f = closureBodyToExpr(func, idxName);
+                if (f == null) return null;
+                var converted:Array<haxe.macro.Expr> = [];
+                for (a in args) {
+                    var ce = closureBodyToExpr(a, idxName);
+                    if (ce == null) return null;
+                    converted.push(ce);
+                }
+                return mk(ECall(f, converted));
+            case TBlock(exprs):
+                var converted:Array<haxe.macro.Expr> = [];
+                for (sub in exprs) {
+                    var ce = closureBodyToExpr(sub, idxName);
+                    if (ce == null) return null;
+                    converted.push(ce);
+                }
+                return mk(EBlock(converted));
+            case TIf(cond, then, _else):
+                var c = closureBodyToExpr(cond, idxName);
+                var t = closureBodyToExpr(then, idxName);
+                if (c == null || t == null) return null;
+                var el:haxe.macro.Expr = null;
+                if (_else != null) {
+                    el = closureBodyToExpr(_else, idxName);
+                    if (el == null) return null;
+                }
+                return mk(EIf(c, t, el));
+            case TBinop(op, e1, e2):
+                var l = closureBodyToExpr(e1, idxName);
+                var r = closureBodyToExpr(e2, idxName);
+                if (l == null || r == null) return null;
+                return mk(EBinop(op, l, r));
+            case TUnop(op, postFix, sub):
+                var s = closureBodyToExpr(sub, idxName);
+                if (s == null) return null;
+                return mk(EUnop(op, postFix, s));
+            case TReturn(sub):
+                var s:haxe.macro.Expr = null;
+                if (sub != null) {
+                    s = closureBodyToExpr(sub, idxName);
+                    if (s == null) return null;
+                }
+                return mk(EReturn(s));
+            case TParenthesis(sub):
+                var s = closureBodyToExpr(sub, idxName);
+                if (s == null) return null;
+                return mk(EParenthesis(s));
+            case TMeta(_, sub):
+                return closureBodyToExpr(sub, idxName);
+            case TVar(v, init):
+                var ie:haxe.macro.Expr = null;
+                if (init != null) {
+                    ie = closureBodyToExpr(init, idxName);
+                    if (ie == null) return null;
+                }
+                return mk(EVars([{ name: v.name, type: null, expr: ie }]));
+            case TArray(e1, e2):
+                var a = closureBodyToExpr(e1, idxName);
+                var b = closureBodyToExpr(e2, idxName);
+                if (a == null || b == null) return null;
+                return mk(EArray(a, b));
+            case TArrayDecl(exprs):
+                var converted:Array<haxe.macro.Expr> = [];
+                for (sub in exprs) {
+                    var ce = closureBodyToExpr(sub, idxName);
+                    if (ce == null) return null;
+                    converted.push(ce);
+                }
+                return mk(EArrayDecl(converted));
+            case TObjectDecl(fields):
+                var converted:Array<haxe.macro.Expr.ObjectField> = [];
+                for (f in fields) {
+                    var ce = closureBodyToExpr(f.expr, idxName);
+                    if (ce == null) return null;
+                    converted.push({ field: f.name, expr: ce });
+                }
+                return mk(EObjectDecl(converted));
+            case TNew(c, _, args):
+                var cls = c.get();
+                var converted:Array<haxe.macro.Expr> = [];
+                for (a in args) {
+                    var ce = closureBodyToExpr(a, idxName);
+                    if (ce == null) return null;
+                    converted.push(ce);
+                }
+                return mk(ENew({ pack: cls.pack, name: cls.name }, converted));
+            case TBreak:    return mk(EBreak);
+            case TContinue: return mk(EContinue);
+            case TThrow(sub):
+                var s = closureBodyToExpr(sub, idxName);
+                if (s == null) return null;
+                return mk(EThrow(s));
+            default:
+                return null;
+        }
+    }
+
+    static function fieldAccessName(fa:haxe.macro.Type.FieldAccess):Null<String> {
+        return switch (fa) {
+            case FInstance(_, _, cf): cf.get().name;
+            case FStatic(_, cf):      cf.get().name;
+            case FAnon(cf):           cf.get().name;
+            case FClosure(_, cf):     cf.get().name;
+            case FDynamic(s):         s;
+            case FEnum(_, ef):        ef.name;
+        };
+    }
+
+    static function staticFieldExpr(cls:haxe.macro.Type.ClassType, fieldName:String, pos:haxe.macro.Expr.Position):haxe.macro.Expr {
+        var path = cls.pack.copy();
+        path.push(cls.name);
+        return { expr: EField(pathToExpr(path, pos), fieldName), pos: pos };
+    }
+
+    static function pathToExpr(parts:Array<String>, pos:haxe.macro.Expr.Position):haxe.macro.Expr {
+        if (parts.length == 0) return { expr: EConst(CIdent("null")), pos: pos };
+        var e:haxe.macro.Expr = { expr: EConst(CIdent(parts[0])), pos: pos };
+        for (i in 1...parts.length) {
+            e = { expr: EField(e, parts[i]), pos: pos };
+        }
+        return e;
     }
 
     // Note: the .value -> StateBridge rewrite happens at Expr level
@@ -1761,10 +2086,14 @@ class WinUIGenerator {
         linkage needed. Called from `analyze()` during the typing pass
         so hxcpp picks the class up as part of the normal compilation. */
     static function emitCallbackModule():Void {
-        if (Lambda.count(callbackRegistry) == 0 && lambdaRegistry.length == 0) return;
+        var totalRegistered = Lambda.count(callbackRegistry)
+            + Lambda.count(parametricCallbackRegistry)
+            + lambdaRegistry.length
+            + parametricLambdaRegistry.length;
+        if (totalRegistered == 0) return;
         var pos = haxe.macro.Context.currentPos();
         var fields:Array<haxe.macro.Expr.Field> = [];
-        // Static-function callbacks.
+        // Static-function callbacks (zero-arg).
         for (fnPath in callbackRegistry.keys()) {
             var wrapperName = callbackRegistry.get(fnPath);
             var bodyExpr = haxe.macro.Context.parse('{ $fnPath(); }', pos);
@@ -1777,6 +2106,38 @@ class WinUIGenerator {
                     args: [],
                     ret: macro :Void,
                     expr: bodyExpr
+                })
+            });
+        }
+        // Parametric static-function callbacks — take the row index
+        // and forward to a typed `(Int) -> Void` target.
+        for (fnPath in parametricCallbackRegistry.keys()) {
+            var wrapperName = parametricCallbackRegistry.get(fnPath);
+            var bodyExpr = haxe.macro.Context.parse('{ $fnPath(idx); }', pos);
+            fields.push({
+                name: wrapperName,
+                pos: pos,
+                meta: [{ name: ":keep", pos: pos }],
+                access: [APublic, AStatic],
+                kind: FFun({
+                    args: [{ name: "idx", type: macro :Int }],
+                    ret: macro :Void,
+                    expr: bodyExpr
+                })
+            });
+        }
+        // Parametric closures — body comes from `closureBodyToExpr`
+        // which has already rewritten ForEach idx captures to `idx`.
+        for (entry in parametricLambdaRegistry) {
+            fields.push({
+                name: entry.name,
+                pos: pos,
+                meta: [{ name: ":keep", pos: pos }],
+                access: [APublic, AStatic],
+                kind: FFun({
+                    args: [{ name: "idx", type: macro :Int }],
+                    ret: macro :Void,
+                    expr: entry.body
                 })
             });
         }
@@ -1805,7 +2166,9 @@ class WinUIGenerator {
         // Hand the wrapper list to UIBuilder so MainWindow.cpp can pull
         // in the matching header.
         var all = [for (n in callbackRegistry) n];
+        for (n in parametricCallbackRegistry) all.push(n);
         for (e in lambdaRegistry) all.push(e.name);
+        for (e in parametricLambdaRegistry) all.push(e.name);
         UIBuilder.exposedCallbacks = all;
     }
 
