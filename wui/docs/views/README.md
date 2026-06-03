@@ -484,18 +484,27 @@ invoked from `_row.Tapped([i](...) { Callbacks_obj::wui_cb_<N>(i); })`.
 > `TUnop`, `TIf`, `TBlock`, `TVar`, `TArrayDecl`, `TObjectDecl`,
 > `TNew`, `TBreak`, `TContinue`, `TThrow`, `TReturn`, `TParenthesis`,
 > `TMeta`, `TWhile`, `TFor`, `TSwitch`, `TTry`, `TCast`, `TFunction`
-> (nested lambdas). Both `idx` and field accesses on the row item
-> (`item.fromName`, `item.subject`, …) are surfaced — references to
-> the item's fields are rewritten as calls into the auto-generated
-> `wui.generated.ForEachAccessor` module.
+> (nested lambdas). What can be captured :
 >
-> Known limits : item field accessors currently emit `String`-typed
-> returns (the rest of the framework reads rows via `Reflect.field`
-> + `Std.string`), so capturing a non-string field like
-> `item.isStarred` fails at re-typing. Capturing locals from the
-> *enclosing* scope (outside the ForEach lambda) is also unsupported
-> — they'd need to be lifted as additional wrapper params, which
-> isn't done yet.
+> * **The row index** (`idx`, the lambda's optional second param) →
+>   wrapper's `idx:Int` parameter
+> * **Row item fields** (`item.subject`, `item.isRead`, …) → routed
+>   through typed accessors in `wui.generated.ForEachAccessor`.
+>   Bodies are emitted for `String`, `Int`, `Float`, `Bool`,
+>   `Dynamic` ; field types beyond these fail the conversion and
+>   you fall back to a clear error.
+> * **Locals declared in the row lambda body** (`var rank = idx + 1`
+>   before the row's `.onTap(...)`) → the initialiser is substituted
+>   inline when the closure references the local. Side-effecting
+>   initialisers re-evaluate on every tap (the substitution is
+>   syntactic, not memoising).
+>
+> Known limits : direct capture of the row item as a whole
+> (`Custom(() -> sendItem(item))` without a field access) isn't
+> supported — only individual fields. Captures from scopes *outside*
+> the ForEach lambda body (e.g. an outer `body()` local) also
+> aren't surfaced ; module statics, `@:state` via `StateBridge`,
+> and inline lambda locals are the supported routes.
 
 The full background — Immutable triggers, accessor codegen, why the list
 never crosses the bridge — is in [Immutable state](../state/immutable.md).

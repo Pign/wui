@@ -74,6 +74,15 @@ class WinUIGenerator {
         item field. */
     public static var foreachContextStateName:Null<String> = null;
 
+    /** Pre-walked map of TVar declarations in the ForEach row lambda
+        body — keyed by `TVar.id`, value is the initializer expression.
+        Lets a closure capture locals declared in the row lambda by
+        substituting the initializer inline (the closure has no
+        runtime scope, but its converted body re-types in the wrapper
+        scope and the substituted expression re-types against the
+        wrapper's `idx` param). */
+    public static var foreachContextLocalInits:Null<Map<Int, haxe.macro.Type.TypedExpr>> = null;
+
     /** Accessors needed by emitted ForEach widgets — one entry per
         unique (stateName, fieldName) pair. Each gets a static method on
         `wui.generated.ForEachAccessor`: `<state>_field_<field>(i:Int):String`
@@ -1936,38 +1945,51 @@ class WinUIGenerator {
                 // Direct capture of the ForEach item var (without
                 // field access) — we can't materialise the row item
                 // as a whole inside the wrapper, only its individual
-                // fields via the accessor. Caller's re-typing will
-                // fail loudly; we surface this earlier as a null
-                // return so the fallback path triggers.
+                // fields via the accessor. Surface as null so the
+                // caller drops to the failing fallback explicitly.
                 if (foreachContextItemVar != null && v.id == foreachContextItemVar.id) return null;
+                // Capture of a local declared in the ForEach row
+                // lambda body — substitute its initializer inline.
+                // The initializer is recursively converted so it
+                // re-types against the wrapper's scope (`idx` etc.).
+                if (foreachContextLocalInits != null) {
+                    var init = foreachContextLocalInits.get(v.id);
+                    if (init != null) return closureBodyToExpr(init, idxName);
+                }
                 // Locals declared inside the closure carry the
                 // declared name and resolve once their TVar
-                // declarations are converted. Captures of other
-                // outer locals will trip Haxe's re-typing with
-                // "unknown identifier", which is the right place
-                // for the user to see the error.
+                // declarations are converted. Captures of further-
+                // out locals (outside the ForEach lambda) will
+                // trip the wrapper's re-typing with "unknown
+                // identifier" — the right place for the user to
+                // see the error.
                 return mk(EConst(CIdent(v.name)));
             case TField(obj, fa):
                 var name = fieldAccessName(fa);
                 if (name == null) return null;
                 // `item.<field>` access — rewrite as a call into the
                 // generated `wui.generated.ForEachAccessor` module.
-                // The accessor reads the row's field via Reflect at
-                // runtime, returning a String (the only accessor
-                // shape currently emitted).
+                // The field's actual Haxe type drives the accessor's
+                // return type (and the suffix on the method name)
+                // so non-string fields (Int, Bool, …) compose
+                // naturally with the rest of the closure body.
                 switch (obj.expr) {
                     case TLocal(v) if (foreachContextItemVar != null
                             && v.id == foreachContextItemVar.id
                             && foreachContextStateName != null):
                         var stateName = foreachContextStateName;
-                        var key = stateName + "::" + name;
+                        var fieldType = fieldHaxeType(fa);
+                        if (fieldType == null) return null;
+                        var typeName = haxeTypeToAccessorType(fieldType);
+                        if (typeName == null) return null;
+                        var key = stateName + "::" + name + "::" + typeName;
                         foreachAccessorFields.set(key, {
                             stateName: stateName,
                             fieldName: name,
-                            fieldType: "String"
+                            fieldType: typeName
                         });
                         var accessorPath = pathToExpr(["wui", "generated", "ForEachAccessor"], pos);
-                        var methodName = stateName + "_field_" + name;
+                        var methodName = accessorMethodName(stateName, name, typeName);
                         return mk(ECall(
                             mk(EField(accessorPath, methodName)),
                             [mk(EConst(CIdent("idx")))]
@@ -2160,6 +2182,70 @@ class WinUIGenerator {
         }
     }
 
+    /** Walk a typed expression collecting every `TVar(v, init)` we
+        find, keyed by `v.id`. Used by `ForEach.wuiAnalyze` to seed
+        `foreachContextLocalInits` from the row lambda body. */
+    public static function collectLocalInits(e:haxe.macro.Type.TypedExpr, out:Map<Int, haxe.macro.Type.TypedExpr>):Void {
+        if (e == null) return;
+        switch (e.expr) {
+            case TVar(v, init): if (init != null) out.set(v.id, init);
+            default:
+        }
+        haxe.macro.TypedExprTools.iter(e, function(c) collectLocalInits(c, out));
+    }
+
+    /** Map a Haxe Type to one of the "accessor type" names we emit
+        bodies for : "String", "Int", "Float", "Bool", "Dynamic".
+        Returns null for types we don't have a typed body for ;
+        caller falls back to the (failing) zero-arg lift so the user
+        sees a clear error rather than a silent miscompile. */
+    static function haxeTypeToAccessorType(t:haxe.macro.Type.Type):Null<String> {
+        return switch (t) {
+            case TAbstract(aref, _):
+                var a = aref.get();
+                if (a.pack.length != 0) null;
+                else switch (a.name) {
+                    case "Int":   "Int";
+                    case "Float": "Float";
+                    case "Bool":  "Bool";
+                    default:      null;
+                };
+            case TInst(cref, _):
+                var c = cref.get();
+                if (c.pack.length == 0 && c.name == "String") "String"
+                else null;
+            case TDynamic(_): "Dynamic";
+            case TType(tref, _):
+                haxeTypeToAccessorType(tref.get().type);
+            default: null;
+        };
+    }
+
+    /** Pull the field's Haxe type out of a `FieldAccess` so the
+        accessor can be sized correctly. */
+    static function fieldHaxeType(fa:haxe.macro.Type.FieldAccess):Null<haxe.macro.Type.Type> {
+        return switch (fa) {
+            case FAnon(cf):           cf.get().type;
+            case FInstance(_, _, cf): cf.get().type;
+            case FStatic(_, cf):      cf.get().type;
+            case FClosure(_, cf):     cf.get().type;
+            default: null;
+        };
+    }
+
+    /** Stable method-name convention :
+          - String fields keep the legacy `<state>_field_<field>`
+            shape so existing analyzeTextChild emissions stay valid
+          - Typed variants get a `_<Type>` suffix
+        Both can co-exist on the same (state, field) pair when one
+        consumer needs a String view and another needs the raw
+        typed value. */
+    public static function accessorMethodName(stateName:String, fieldName:String, fieldType:String):String {
+        return fieldType == "String"
+            ? stateName + "_field_" + fieldName
+            : stateName + "_field_" + fieldName + "_" + fieldType;
+    }
+
     static function moduleTypeToComplexType(mt:haxe.macro.Type.ModuleType):haxe.macro.Expr.ComplexType {
         return switch (mt) {
             case TClassDecl(c): TPath({ pack: c.get().pack, name: c.get().name, params: [] });
@@ -2330,24 +2416,37 @@ class WinUIGenerator {
             var info = foreachAccessorFields.get(key);
             var stateName = info.stateName;
             var fieldName = info.fieldName;
-            // String-only for MVP. The accessor pulls the row out of the
-            // ImmutableList<Dynamic>, then uses Reflect-style field
-            // access — works for anonymous-typedef rows like EmailRow.
+            var fieldType = info.fieldType;
+            // Per-type accessor body. The String shape stays the
+            // legacy default — the rest of the framework (text rows,
+            // existing rebuild emitters) consume it untouched. Typed
+            // variants get distinct method names via
+            // `accessorMethodName` so they can coexist.
+            var defaultValue:String;
+            var cast_:String;
+            var ret:haxe.macro.Expr.ComplexType;
+            switch (fieldType) {
+                case "Int":     defaultValue = "0";     cast_ = "(cast v : Int)";     ret = macro :Int;
+                case "Float":   defaultValue = "0.0";   cast_ = "(cast v : Float)";   ret = macro :Float;
+                case "Bool":    defaultValue = "false"; cast_ = "(cast v : Bool)";    ret = macro :Bool;
+                case "Dynamic": defaultValue = "null";  cast_ = "v";                  ret = macro :Dynamic;
+                default:        defaultValue = '""';    cast_ = "Std.string(v)";      ret = macro :String;
+            }
             var body =
                 '{ var s:wui.state.State<wui.state.ImmutableList<Dynamic>> = cast wui.state.State.getByName("' + stateName + '");'
-              + ' if (s == null || s.value == null || i < 0 || i >= s.value.length) return "";'
+              + ' if (s == null || s.value == null || i < 0 || i >= s.value.length) return $defaultValue;'
               + ' var row:Dynamic = s.value.get(i);'
-              + ' if (row == null) return "";'
+              + ' if (row == null) return $defaultValue;'
               + ' var v:Dynamic = Reflect.field(row, "' + fieldName + '");'
-              + ' return v == null ? "" : Std.string(v); }';
+              + ' return v == null ? $defaultValue : $cast_; }';
             fields.push({
-                name: stateName + "_field_" + fieldName,
+                name: accessorMethodName(stateName, fieldName, fieldType),
                 pos: pos,
                 meta: [{ name: ":keep", pos: pos }],
                 access: [APublic, AStatic],
                 kind: FFun({
                     args: [{ name: "i", type: macro :Int }],
-                    ret: macro :String,
+                    ret: ret,
                     expr: haxe.macro.Context.parse(body, pos)
                 })
             });

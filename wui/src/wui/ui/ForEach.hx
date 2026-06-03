@@ -66,6 +66,7 @@ class ForEach extends View {
         var lambdaItemVar:haxe.macro.Type.TVar = null;
         var lambdaIdxName:String = null;
         var lambdaBody:TypedExpr = null;
+        var lambdaRawBody:TypedExpr = null;
         switch (args[1].expr) {
             case TFunction(tf):
                 if (tf.args.length > 0) {
@@ -79,6 +80,10 @@ class ForEach extends View {
                 // loop counter at runtime.
                 if (tf.args.length > 1) lambdaIdxName = tf.args[1].v.name;
                 lambdaBody = tf.expr;
+                // Keep an un-unwrapped reference so the TVar
+                // declarations inside a TBlock body survive long
+                // enough to be collected for closure-local capture.
+                lambdaRawBody = tf.expr;
             default:
                 Context.warning("ForEach: second argument must be a lambda `(item) -> view` or `(item, idx) -> view`", Context.currentPos());
                 return ctx.defaultNode();
@@ -105,9 +110,17 @@ class ForEach extends View {
         var prevForeachIdx = wui.macros.WinUIGenerator.foreachContextIdxName;
         var prevForeachItemVar = wui.macros.WinUIGenerator.foreachContextItemVar;
         var prevForeachState = wui.macros.WinUIGenerator.foreachContextStateName;
+        var prevForeachLocals = wui.macros.WinUIGenerator.foreachContextLocalInits;
         wui.macros.WinUIGenerator.foreachContextIdxName = lambdaIdxName;
         wui.macros.WinUIGenerator.foreachContextItemVar = lambdaItemVar;
         wui.macros.WinUIGenerator.foreachContextStateName = stateName;
+        // Pre-walk : collect TVar declarations from the row lambda
+        // body (the un-unwrapped form, so TBlock with TVar entries
+        // is fully visible) so a `.onTap(StateAction.Custom(...))`
+        // closure can capture locals declared in the row template.
+        var lambdaLocals = new Map<Int, haxe.macro.Type.TypedExpr>();
+        wui.macros.WinUIGenerator.collectLocalInits(lambdaRawBody, lambdaLocals);
+        wui.macros.WinUIGenerator.foreachContextLocalInits = lambdaLocals;
         var walking = true;
         while (walking) {
             walking = false;
@@ -147,6 +160,7 @@ class ForEach extends View {
         wui.macros.WinUIGenerator.foreachContextIdxName = prevForeachIdx;
         wui.macros.WinUIGenerator.foreachContextItemVar = prevForeachItemVar;
         wui.macros.WinUIGenerator.foreachContextStateName = prevForeachState;
+        wui.macros.WinUIGenerator.foreachContextLocalInits = prevForeachLocals;
 
         var rowOrientation = "Horizontal";
         var childExprs:Array<TypedExpr> = [];
@@ -410,7 +424,10 @@ class ForEach extends View {
                             Context.warning('ForEach: Text argument must be `${lambdaParamName}.<field>` or a literal', arg.pos);
                             return null;
                         }
-                        var key = stateName + "::" + fieldName;
+                        // Text rows always want the String view —
+                        // distinct from any typed accessor a closure
+                        // capture might register for the same field.
+                        var key = stateName + "::" + fieldName + "::String";
                         wui.macros.WinUIGenerator.foreachAccessorFields.set(key, {
                             stateName: stateName,
                             fieldName: fieldName,

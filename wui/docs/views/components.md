@@ -233,9 +233,9 @@ and `ForEach` knows nothing about it.
 | Override `body()` to return a tree of primitives | Have constructor args that aren't directly assigned to a same-named field (no transforms in the ctor) |
 | Take any number of constructor args | Declare new `@:state` inside a component — the state must live on the App |
 | Take `State<T>` references and bind them via `TextBox`, `Text`, `Slider`, … | Be used inside another component's `effects()` (effects belong to the App) |
-| Use other components inside `body()` (composition is recursive) | Capture non-string fields off the row item — accessors emit `String` returns, so `item.isStarred` (Bool) in a `ForEach` closure fails at re-typing. String fields work. |
+| Use other components inside `body()` (composition is recursive) | Capture the row item as a whole inside a `ForEach` closure (only individual fields are surfaced via `ForEachAccessor`) |
 | Stack modifiers — `.padding(8)`, `.background(...)`, `.onTap(StateAction.Custom(fn))` — at the call site. They apply to the inlined root, on a primitive or inside a `ForEach` template. | |
-| Inside a `ForEach` template, receive the row index via the lambda's optional second argument and reference it from a `Custom` closure or typed `(Int) -> Void` static callback. Closures may also reference `item.<field>` — the macro rewrites those as calls into the auto-generated `ForEachAccessor`. | |
+| Inside a `ForEach` template, receive the row index via the lambda's optional second argument and reference it from a `Custom` closure or typed `(Int) -> Void` static callback. Closures can also reference `item.<field>` (any of String/Int/Float/Bool/Dynamic) and locals declared in the row lambda body — the macro rewrites field accesses through `ForEachAccessor` and substitutes local initialisers inline. | |
 
 The list is short on purpose — Phase 3 deliberately ships the minimum that
 unblocks composition. Richer constructor patterns are tracked in the WUI
