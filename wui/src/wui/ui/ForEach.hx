@@ -30,11 +30,10 @@ import wui.macros.PrimitiveCtx;
  */
 @:wuiPrimitive
 class ForEach extends View {
-    public function new(items:Dynamic, template:Dynamic -> View, ?tapSelect:Dynamic) {
+    public function new(items:Dynamic, template:Dynamic -> View) {
         super("ForEach");
         properties.set("items", items);
         properties.set("template", template);
-        if (tapSelect != null) properties.set("tapSelect", tapSelect);
     }
 
     #if macro
@@ -125,25 +124,11 @@ class ForEach extends View {
 
         wui.macros.WinUIGenerator.foreachAccessorLengths.set(stateName, true);
 
-        // Optional 3rd arg: an Int @:state ref. Each row gets a
-        // `Tapped` handler that writes its index into that state and
-        // notifies — gives the user a "selected row" trigger to hang
-        // an effect on, without ForEach needing to know about the
-        // detail view itself.
-        var tapStateName:String = null;
-        if (args.length > 2) {
-            tapStateName = ctx.extractStateRef(args[2]);
-            if (tapStateName == null) {
-                Context.warning("ForEach: 3rd arg must be a @:state field reference (Int)", Context.currentPos());
-            }
-        }
-
         var props:Map<String, Dynamic> = new Map();
         props.set("foreachStateName", stateName);
         props.set("foreachVersionKey", versionKey);
         props.set("foreachRowOrientation", rowOrientation);
         props.set("foreachChildSpecs", childSpecs);
-        if (tapStateName != null) props.set("foreachTapStateName", tapStateName);
         return { viewType: "ForEach", children: [], modifiers: [], properties: props };
     }
 
@@ -209,14 +194,6 @@ class ForEach extends View {
                 default:
                     ctx.lines.push('        // Unknown ForEach child kind: $kind');
             }
-        }
-
-        var tapStateName:Dynamic = node.properties.get("foreachTapStateName");
-        if (tapStateName != null) {
-            var tapId = ctx.cppId(Std.string(tapStateName));
-            ctx.lines.push('        _row.Tapped([i](winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::Input::TappedRoutedEventArgs const&) {');
-            ctx.lines.push('            s_$tapId = i; notify_$tapId();');
-            ctx.lines.push('        });');
         }
 
         ctx.lines.push('        $panelVar.Children().Append(_row);');

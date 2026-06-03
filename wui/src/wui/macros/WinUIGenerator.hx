@@ -1153,6 +1153,13 @@ class WinUIGenerator {
             case "toolTip":
                 var text = args.length > 0 ? extractStringOrExpr(args[0]) : "";
                 { type: "ToolTip", values: [text] };
+            case "onTap":
+                // Same compile-to-C++ path Button uses for its `action`
+                // arg. Yields a C++ snippet that runs the chosen
+                // StateAction ; `applyModifiers` wraps it in a Tapped
+                // event handler.
+                var snippet = args.length > 0 ? extractStateAction(args[0]) : null;
+                snippet != null ? { type: "OnTap", values: [snippet] } : null;
             case "borderBrush":
                 var vals = args.length > 0 ? extractColorValues(args[0]) : ["Gray"];
                 { type: "BorderBrush", values: vals };

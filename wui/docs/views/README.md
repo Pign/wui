@@ -405,17 +405,16 @@ to the field's `<name>__v` trigger and rebuilds the row panel on every
 replacement of the underlying list.
 
 ```haxe
-new ForEach(items:Dynamic, template:Item -> View, ?tapSelect:Dynamic)
+new ForEach(items:Dynamic, template:Item -> View)
 ```
 
 ```haxe
 @:state var todos:ImmutableList<Todo> = ImmutableList.empty();
-@:state var selectedIdx:Int = -1;
 
 new ForEach(todos, (todo:Todo) -> new VStack([
     new Text(todo.label).font(BodyStrong),
     new Text(todo.meta).foregroundColor(brand.muted()),
-]), selectedIdx)
+]))
 ```
 
 What the macro guarantees :
@@ -432,10 +431,6 @@ What the macro guarantees :
   (`.font(...)`, `.foregroundColor(...)`, `.bold()`, …) are honoured — the
   ForEach analyzer walks the call chain and applies each modifier to the
   per-row `TextBlock`.
-- The optional `tapSelect` argument is a `@:state` field reference of
-  type `Int`. When set, every row gets a `Tapped` handler that writes its
-  index into that field and notifies — useful for hooking a detail view
-  via `Effect.run` on the selection.
 
 The generated code emits a vertical StackPanel, a `std::function<void()>`
 rebuild closure that pulls the current row count and each per-field value
@@ -444,8 +439,54 @@ through `wui.generated.ForEachAccessor` (Haxe-side), and a listener on
 `DispatcherQueue.TryEnqueue` (same re-entrance pattern as other state
 bindings).
 
+### Row interaction
+
+Row-tap handlers go through the generic [`.onTap(StateAction)`](#interaction)
+modifier on the row View — same modifier you'd use on any other widget.
+The per-row index isn't exposed to the template lambda yet, so the action's
+target has to be something the row can derive from its own data (e.g.
+`StateAction.SetValue(detailId, todo.id)` reads the row's id at codegen
+time). Surfacing the index to the lambda is a tracked follow-up.
+
+> **Known gap** — modifiers stacked on the template root (`(item) ->
+> new MyRow(...).onTap(...)`) don't propagate to the row container yet
+> in the current ForEach implementation. For now, attach `.onTap` on a
+> wrapping primitive inside the template, or wait for the propagation
+> pass.
+
 The full background — Immutable triggers, accessor codegen, why the list
 never crosses the bridge — is in [Immutable state](../state/immutable.md).
+
+---
+
+## Interaction
+
+The `.onTap(action:StateAction)` modifier is inherited by every View —
+primitives and user components alike. It fires a `StateAction` when the
+user clicks or taps anywhere inside the view's bounds. The action vocabulary
+is identical to `Button`'s :
+
+```haxe
+new MyComponent(...)
+    .onTap(selectedIdx.setTo(3))                       // method-form action
+    .onTap(StateAction.Toggle(isExpanded))             // enum constructor
+    .onTap(StateAction.Custom(MyApp.handleTap))        // static fn ref
+    .onTap(StateAction.Custom(() -> {                  // anonymous lambda
+        wui.state.StateBridge.setString("status", "tapped");
+        sys.thread.Thread.create(doWork);
+    }))
+    .onTap(StateAction.Sequence([                      // chain
+        StateAction.SetValue(loadingFlag, true),
+        StateAction.Custom(MyApp.fetchDetail),
+    ]));
+```
+
+Under the hood : the modifier analyzer compiles the `StateAction` to a C++
+snippet (same path used for `Button.action`), and `applyModifiers` wraps it
+in a `Tapped` event handler attached to the resulting WinRT control. `Tapped`
+is on `UIElement`, so the modifier composes with any primitive — including
+`Button` (its `Click` and the `Tapped` from `.onTap` both fire on a mouse
+click, the user can pick either route).
 
 ---
 

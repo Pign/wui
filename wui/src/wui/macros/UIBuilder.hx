@@ -587,6 +587,17 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
                 case "ToolTip":
                     var escaped = escapeWideString(Std.string(mod.values[0]));
                     lines.push('winrt_controls::ToolTipService::SetToolTip($varName, winrt::box_value(L"$escaped"));');
+                case "OnTap":
+                    // The compiled action snippet was produced by
+                    // `extractStateAction` at analyze time. Wrap it in
+                    // a `Tapped` handler — works on every UIElement,
+                    // so this modifier composes with any primitive
+                    // (Button.Click + Tapped both fire on click ; the
+                    // user can choose either route).
+                    var snippet = Std.string(mod.values[0]);
+                    lines.push('$varName.Tapped([](winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::Input::TappedRoutedEventArgs const&) {');
+                    lines.push('    $snippet');
+                    lines.push('});');
                 case "BorderBrush":
                     var colorCode = generateColorBrush(mod.values);
                     lines.push('$varName.BorderBrush($colorCode);');

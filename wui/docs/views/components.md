@@ -230,11 +230,15 @@ and `ForEach` knows nothing about it.
 
 | You can | You can't (yet) |
 |---|---|
-| Override `body()` to return a tree of primitives | Make the component itself interactive (no `Tapped` / `Click` at the component root — wrap in a `Button` or use a primitive that has the event) |
-| Take any number of constructor args | Have constructor args that aren't directly assigned to a same-named field (no transforms in the ctor) |
-| Take `State<T>` references and bind them via `TextBox`, `Text`, `Slider`, … | Declare new `@:state` inside a component — the state must live on the App |
-| Use other components inside `body()` (composition is recursive) | Use modifier chains on the component instance (`new Title("X").padding()` — modifiers apply to the OUTER ContentControl, which is a Phase 3 follow-up ; chain on a wrapping View instead) |
-| Be used inside a `ForEach` template | Be used inside another component's `effects()` (effects belong to the App) |
+| Override `body()` to return a tree of primitives | Have constructor args that aren't directly assigned to a same-named field (no transforms in the ctor) |
+| Take any number of constructor args | Declare new `@:state` inside a component — the state must live on the App |
+| Take `State<T>` references and bind them via `TextBox`, `Text`, `Slider`, … | Be used inside another component's `effects()` (effects belong to the App) |
+| Use other components inside `body()` (composition is recursive) | Stack modifiers on the component **inside a ForEach template** — modifiers on the template root aren't propagated to the row container yet. Modifiers in non-ForEach contexts work normally. |
+| Attach interaction via the standard modifier chain : `new MyComponent(...).onTap(StateAction.Custom(fn)).padding(8)` — the modifiers apply to the inlined root, just like on a primitive | |
+
+The list is short on purpose — Phase 3 deliberately ships the minimum that
+unblocks composition. ForEach template-root modifier propagation and
+richer constructor patterns are tracked in the WUI roadmap.
 
 The list is short on purpose — Phase 3 deliberately ships the minimum that
 unblocks composition. Modifier chains on the component, an `effects()` hook
@@ -264,30 +268,25 @@ today.
 
 ## Components and modifiers
 
-`new Title("Hello").padding(16)` — what does that do ?
-
-The component's runtime is the macro inlining ; `padding(16)` is a runtime
-modifier chain method on `View`. The inliner sees `new Title("Hello")` and
-substitutes the body, but it doesn't currently propagate the modifiers from
-the call site into the inlined tree.
-
-Workaround for now : do the wrapping at the call site :
+`new Title("Hello").padding(16).onTap(StateAction.Custom(fn))` — works the
+same as on any primitive. The macro's modifier-chain analyzer walks the
+TCall chain on top of `new MyComponent(...)`, treats the underlying
+inlined View as the base, and pushes the chained modifiers onto its
+modifier list. The emitted C++ applies them to the inlined root control.
 
 ```haxe
-// Instead of new Title("Hello").padding(16) — chain on a wrapper
-new VStack([new Title("Hello")]).padding(16)
+// All three lines apply to the same TextBlock (the one Title's body
+// returns) — Padding around it, brand foreground, a Tapped handler.
+new Title("Hello")
+    .padding(16)
+    .foregroundColor(brand.accent())
+    .onTap(StateAction.Custom(MyApp.showAbout))
 ```
 
-Or include the modifier inside the component's body :
-
-```haxe
-override function body():View {
-    return new Text(text).font(TitleLarge).padding(16);  // baked in
-}
-```
-
-The "modifiers chained on the component get applied to the inlined root"
-behaviour is on the follow-up list. When it lands, the natural form will work.
+The one exception is **inside a `ForEach` template** : modifiers on the
+template root don't reach the per-row container yet. For now, route per-row
+interaction through a wrapping primitive instead. The propagation pass is
+a tracked follow-up.
 
 ---
 

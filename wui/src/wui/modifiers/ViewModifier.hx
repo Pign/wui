@@ -34,6 +34,13 @@ enum ViewModifier {
     Disabled(isDisabled:Bool);
     Visible(isVisible:Bool);
     ToolTip(text:String);
+    /** Fires a `StateAction` when the user taps (mouse click or
+        touch) anywhere inside the view's bounds. Works on any View,
+        primitive or user component — `applyModifiers` emits a
+        `Tapped` event on the resulting C++ control. The action
+        vocabulary is the same as `Button`'s : `SetValue`, `Toggle`,
+        `Custom(staticFn)`, `Sequence`, etc. */
+    OnTap(action:wui.state.StateAction);
 
     // Lifecycle
     OnLoaded(callback:() -> Void);
