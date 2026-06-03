@@ -16,12 +16,25 @@ class State<T> {
     var _value:T;
     var _listeners:Array<T -> Void>;
 
+    /**
+     * Optional companion bridge key carrying a monotonic Int "version".
+     * Set non-null when the State holds an `wui.state.Immutable` value:
+     * the list/record itself stays Haxe-side (no C++ copy of the
+     * payload), and only this counter crosses to C++ so widgets like
+     * `ForEach` can re-render on whole-value replacement. Null for
+     * primitive @:state where the value goes directly through the
+     * StateBridge.
+     */
+    var _versionKey:Null<String>;
+    var _version:Int = 0;
+
     /** Global registry of all state instances by name. */
     public static var _registry:Map<String, Dynamic> = new Map();
 
-    public function new(initial:T, stateName:String) {
+    public function new(initial:T, stateName:String, ?versionKey:String) {
         _value = initial;
         name = stateName;
+        _versionKey = versionKey;
         _listeners = [];
         _registry.set(stateName, this);
     }
@@ -36,6 +49,21 @@ class State<T> {
     /** Set the value and notify all subscribers. */
     function set_value(newValue:T):T {
         _value = newValue;
+        if (_versionKey != null) {
+            // Bump the companion trigger so C++-side subscribers
+            // (ForEach rebuild handlers) get notified. The Haxe-side
+            // _value remains the source of truth — only the counter
+            // travels through the bridge.
+            _version++;
+            try {
+                wui.state.StateBridge.setInt(_versionKey, _version);
+            } catch (_:Dynamic) {
+                // Bridge key not yet registered (e.g. early in App
+                // construction before UIBuilder wires it up). Skipping
+                // is safe: the first real set after wiring will catch
+                // up because we still bumped _version locally.
+            }
+        }
         for (listener in _listeners) {
             listener(newValue);
         }

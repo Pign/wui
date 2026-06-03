@@ -21,8 +21,9 @@ using haxe.macro.Tools;
  * requires `T` to be one of:
  *  - A primitive: `String`, `Int`, `Float`, `Bool`
  *  - A class extending `wui.state.Observable`
+ *  - A class implementing `wui.state.Immutable`
  *
- * (Nullary enums and `wui.state.Immutable` come in later phases.)
+ * (Nullary enums come in a later phase.)
  *
  * Codegen rules:
  *  - Primitive `@:state` on App: wrapped in `wui.state.State<T>` and
@@ -41,6 +42,12 @@ using haxe.macro.Tools;
  *  - Observable-typed `@:state` on Observable: rejected for now (phase
  *    1 limitation) — flag with `Context.error` so the user knows to
  *    flatten or wait.
+ *  - Immutable-typed `@:state` on App: wrapped in `wui.state.State<T>`
+ *    (same as primitive) and paired with a synthetic companion
+ *    primitive `@:state var <name>__v:Int = 0;` that the State<T>
+ *    bumps on every `.value = ...` write. The list/record value
+ *    itself stays Haxe-side — only the `Int` trigger crosses the
+ *    bridge, which is what `ForEach` listens on.
  */
 class StateMacro {
     #if macro
@@ -48,10 +55,11 @@ class StateMacro {
         var fields = Context.getBuildFields();
         var isObservableClass = currentClassExtendsObservable();
 
-        // Categorise @:state fields into primitive vs Observable-typed
-        // so we can fork the codegen below.
+        // Categorise @:state fields into primitive / Observable-typed /
+        // Immutable-typed so we can fork the codegen below.
         var primitiveStates:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}> = [];
         var observableStates:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}> = [];
+        var immutableStates:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position, versionKey:String}> = [];
 
         var newFields:Array<Field> = [];
         for (field in fields) {
@@ -88,6 +96,45 @@ class StateMacro {
                                 kind: FVar(t, null)
                             });
 
+                        case ImmutableType:
+                            if (isObservableClass) {
+                                Context.error("@:state of Immutable type inside an Observable is not supported (an Observable already decomposes per-field; nest only primitives).", field.pos);
+                            }
+                            if (initialValue == null) {
+                                Context.error("@:state field of Immutable type must have an explicit initial value (e.g. `= ImmutableList.empty()`).", field.pos);
+                            }
+                            // The user-facing field keeps Haxe-side semantics:
+                            // wrapped in State<T>, .value returns the immutable
+                            // ref directly. The companion __v field below carries
+                            // the C++ trigger.
+                            var versionFieldName = field.name + "__v";
+                            immutableStates.push({
+                                name: field.name,
+                                type: t,
+                                initialValue: initialValue,
+                                pos: field.pos,
+                                versionKey: versionFieldName
+                            });
+                            newFields.push(wrapAsState(field, t, initialValue));
+
+                            // Synthetic primitive @:state Int — same shape the
+                            // existing code already knows how to bridge.
+                            var zero = macro 0;
+                            primitiveStates.push({
+                                name: versionFieldName,
+                                type: macro :Int,
+                                initialValue: zero,
+                                pos: field.pos
+                            });
+                            var syntheticVersionField:Field = {
+                                name: versionFieldName,
+                                access: [],
+                                pos: field.pos,
+                                meta: [{name: ":state", params: [], pos: field.pos}],
+                                kind: FVar(macro :Int, zero)
+                            };
+                            newFields.push(wrapAsState(syntheticVersionField, macro :Int, zero));
+
                         case Ineligible(reason):
                             Context.error('@:state var ${field.name}:T — $reason', field.pos);
                     }
@@ -108,8 +155,21 @@ class StateMacro {
         // (or any non-Observable class with @:state). Observable
         // subclasses don't touch the constructor — their State<T>s
         // live in `_attach` instead.
-        if (!isObservableClass && (primitiveStates.length > 0 || observableStates.length > 0)) {
-            injectAppConstructor(newFields, primitiveStates, observableStates);
+        if (!isObservableClass && (primitiveStates.length > 0 || observableStates.length > 0 || immutableStates.length > 0)) {
+            injectAppConstructor(newFields, primitiveStates, observableStates, immutableStates);
+        }
+
+        // Immutable @:state fields rely on the Haxe-side State<T>
+        // wrapper to hold the list payload — so the App MUST be
+        // instantiated at runtime. The user's `static main()` typically
+        // doesn't `new` the App (the WUI macro pipeline reads `body()`
+        // and `effects()` at compile time and never invokes them as
+        // Haxe code), so we add a `static __init__()` block that does
+        // a one-shot construction. The resulting instance is unnamed —
+        // its only job is to populate `wui.state.State._registry` so
+        // `wui.generated.ForEachAccessor` can find the list.
+        if (!isObservableClass && immutableStates.length > 0) {
+            injectAppMain(newFields);
         }
 
         // Pre-typing rewrite of `state.value` reads/writes inside
@@ -166,7 +226,33 @@ class StateMacro {
             return Ineligible("Could not resolve the field type.");
         }
         if (isObservable(resolved)) return ObservableType;
-        return Ineligible("type must be a primitive (String/Int/Float/Bool) or extend wui.state.Observable.");
+        if (implementsImmutable(resolved)) return ImmutableType;
+        return Ineligible("type must be a primitive (String/Int/Float/Bool), extend wui.state.Observable, or implement wui.state.Immutable.");
+    }
+
+    /** Walk a Type's class+interface chain looking for the
+        `wui.state.Immutable` marker interface. Reactive `ImmutableList`
+        and any user-defined value type implementing the marker qualify
+        for the version-trigger codegen path. */
+    static function implementsImmutable(t:Type):Bool {
+        if (t == null) return false;
+        switch (t) {
+            case TInst(ref, _):
+                var cls = ref.get();
+                var cur = cls;
+                while (cur != null) {
+                    if (cur.interfaces != null) {
+                        for (iface in cur.interfaces) {
+                            var ic = iface.t.get();
+                            if (ic.pack.length == 2 && ic.pack[0] == "wui" && ic.pack[1] == "state" && ic.name == "Immutable") return true;
+                        }
+                    }
+                    if (cur.superClass == null) break;
+                    cur = cur.superClass.t.get();
+                }
+            default:
+        }
+        return false;
     }
 
     /** Walk a Type's class chain looking for wui.state.Observable. */
@@ -247,13 +333,17 @@ class StateMacro {
     }
 
     /** Prepend the State<T> constructor calls and Observable attach
-        calls to the App's `new()` (or create one if absent). Mirrors
-        the previous behaviour for primitive @:state plus the new
-        Observable handling. */
+        calls to the App's `new()` (or create one if absent). Handles
+        primitive @:state, Observable-typed @:state, and Immutable-typed
+        @:state in the order they were collected — Immutables come last
+        so their synthetic `<name>__v` companion primitive (already
+        appended to `primitives`) is constructed before the Immutable
+        State<T> that references it. */
     static function injectAppConstructor(
         newFields:Array<Field>,
         primitives:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}>,
-        observables:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}>
+        observables:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}>,
+        immutables:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position, versionKey:String}>
     ):Void {
         var initExprs:Array<Expr> = [];
         for (sf in primitives) {
@@ -264,6 +354,11 @@ class StateMacro {
             var nameLit = sf.name;
             initExprs.push(macro $i{nameLit} = ${sf.initialValue});
             initExprs.push(macro $i{nameLit}._attach($v{nameLit}));
+        }
+        for (sf in immutables) {
+            var nameLit = sf.name;
+            var versionLit = sf.versionKey;
+            initExprs.push(macro $i{nameLit} = new wui.state.State($e{sf.initialValue}, $v{nameLit}, $v{versionLit}));
         }
 
         var constructorFound = false;
@@ -297,6 +392,59 @@ class StateMacro {
                 })
             });
         }
+    }
+
+    /** Prepend `new ThisClass();` to the App's `static main()` so the
+        Haxe-side State<T> wrappers get constructed and registered into
+        `State._registry` before the user's main body runs.
+
+        Why not `static __init__`: hxcpp runs `__init__` blocks during
+        the `__boot` phase, but `wui.state.State`'s static `_registry`
+        is itself an inline-initialised static (set during *its own*
+        `__boot`). Boot order is non-deterministic — if the App's
+        `__init__` runs before `State._boot()`, the registry is null
+        and `_registry.set(...)` segfaults the process before any
+        diagnostic can reach the debug console. By the time `main()`
+        runs, every `__boot()` has completed, so the registry is
+        guaranteed to be live.
+
+        If the user didn't write a `main()`, we synthesise an empty
+        one with just the construction call. */
+    static function injectAppMain(newFields:Array<Field>):Void {
+        var cls = Context.getLocalClass().get();
+        var typePath:TypePath = { pack: cls.pack, name: cls.name };
+        var ctorStmt:Expr = macro { new $typePath(); };
+
+        for (i in 0...newFields.length) {
+            var field = newFields[i];
+            if (field.name != "main") continue;
+            switch (field.kind) {
+                case FFun(f):
+                    var existing:Array<Expr> = [];
+                    if (f.expr != null) {
+                        switch (f.expr.expr) {
+                            case EBlock(exprs): existing = exprs;
+                            default: existing = [f.expr];
+                        }
+                    }
+                    existing.unshift(ctorStmt);
+                    f.expr = macro $b{existing};
+                    return;
+                default:
+            }
+        }
+        // No user `main()` — synthesise one. Same shape as `haxelib new`
+        // skeletons, just hosting the auto-construction call.
+        newFields.push({
+            name: "main",
+            access: [APublic, AStatic],
+            pos: Context.currentPos(),
+            kind: FFun({
+                args: [],
+                ret: macro :Void,
+                expr: macro $b{[ctorStmt]}
+            })
+        });
     }
 
     /** When the user omits the initialiser on a primitive @:state field
@@ -421,6 +569,7 @@ class StateMacro {
 private enum TypeCategory {
     Primitive;
     ObservableType;
+    ImmutableType;
     Ineligible(reason:String);
 }
 #end

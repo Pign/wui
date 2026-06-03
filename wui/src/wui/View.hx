@@ -20,6 +20,28 @@ class View {
         this.properties = new Map();
     }
 
+    /**
+     * Override hook for user-defined View components — the macro
+     * pipeline calls `WinUIGenerator.inlineUserBody` when it sees
+     * `new MyComponent(...)` for any class extending `View` that
+     * overrides `body()`. The override's expression is inlined into
+     * the surrounding View tree at compile time, so this method
+     * never runs at runtime; returning `this` here is a safe
+     * placeholder.
+     *
+     * Constraints (enforced by the macro, not by the type system):
+     *  - The constructor must assign each param to a same-named
+     *    field with a plain `this.field = param` statement so the
+     *    inliner can substitute.
+     *  - `body()` must return a View expression composed of WUI
+     *    primitives or other user components. References to
+     *    `this.<field>` resolve to the corresponding constructor
+     *    argument.
+     */
+    public function body():View {
+        return this;
+    }
+
     // --- Layout Modifiers ---
 
     public function padding(?amount:Float):View {

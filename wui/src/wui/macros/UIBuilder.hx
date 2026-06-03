@@ -61,6 +61,37 @@ class UIBuilder {
     public static var exposedCallbacks:Array<String> = [];
 
     /**
+     * True when at least one `wui.ui.ForEach` widget was analysed and
+     * its accessor module (`wui.generated.ForEachAccessor`) was emitted.
+     * Triggers the `<wui/generated/ForEachAccessor.h>` include in
+     * MainWindow.cpp so the rebuild lambdas can resolve
+     * `::wui::generated::ForEachAccessor_obj::<name>_length()` etc.
+     */
+    public static var foreachAccessorPresent:Bool = false;
+
+    /**
+     * Per-viewType emit functions, registered by primitive widget
+     * classes (see `wui.macros.PrimitiveCtx`). Consulted by
+     * `generateNodeImpl` before falling through to the legacy
+     * switch — that switch is being drained one widget at a time
+     * as each primitive moves into self-emit form.
+     *
+     * Keyed by `viewType` (the string a widget's `wuiAnalyze` writes
+     * into its ViewNode), not by Haxe class name, because multiple
+     * widget classes can share an emit (HStack / VStack both produce
+     * "StackPanel" nodes — one StackPanelEmitter handles both).
+     */
+    public static var emitRegistry:Map<String, ViewNode -> wui.macros.PrimitiveCtx.EmitCtx -> String> = new Map();
+
+    /** Register a per-viewType emit function. Re-registration
+        overwrites silently — last writer wins, deliberately, so a
+        consumer can override a framework primitive locally without
+        forking. */
+    public static function registerEmitter(viewType:String, fn:ViewNode -> wui.macros.PrimitiveCtx.EmitCtx -> String):Void {
+        emitRegistry.set(viewType, fn);
+    }
+
+    /**
      * `wui.Effect.run(fn, [deps])` registrations harvested by
      * `WinUIGenerator.collectEffects`. Each entry's `wrapperName` is
      * already in `exposedCallbacks` (registered via `registerLambda`);
@@ -323,6 +354,15 @@ $titleBarDecl}
         var callbacksInclude = exposedCallbacks.length > 0
             ? '#include <hxcpp.h>\n#include <wui/generated/Callbacks.h>\n'
             : '';
+        // ForEach widgets reach into Haxe via wui.generated.ForEachAccessor.
+        // Only pull in the header when the macro actually emitted that
+        // module — otherwise we'd reference a non-existent type.
+        if (foreachAccessorPresent) {
+            if (exposedCallbacks.length == 0) {
+                callbacksInclude = '#include <hxcpp.h>\n';
+            }
+            callbacksInclude += '#include <wui/generated/ForEachAccessor.h>\n';
+        }
 
         // Title-bar passthrough needs `InputNonClientPointerSource` from
         // the Microsoft.UI.Input WinRT projection. Only emitted when the
@@ -451,359 +491,35 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
     }
 
     static function generateNodeImpl(node:ViewNode, lines:Array<String>, depth:Int):String {
-        return switch (node.viewType) {
-            case "StackPanel": generateStackPanel(node, lines, depth);
-            case "Grid": generateGrid(node, lines, depth);
-            case "TextBlock": generateTextBlock(node, lines, depth);
-            case "Button": generateButton(node, lines, depth);
-            case "TextBox": generateTextBox(node, lines, depth);
-            case "ToggleSwitch": generateToggleSwitch(node, lines, depth);
-            case "Slider": generateSlider(node, lines, depth);
-            case "Image": generateImage(node, lines, depth);
-            case "ScrollViewer": generateScrollViewer(node, lines, depth);
-            case "CheckBox": generateCheckBox(node, lines, depth);
-            case "ProgressRing": generateProgressRing(node, lines, depth);
-            case "Spacer": generateSpacer(node, lines, depth);
-            default: generateGenericControl(node, lines, depth);
+        // Every viewType the framework knows about lives in
+        // `emitRegistry`. Unknown viewType → generic Border
+        // placeholder (the same fallback the legacy switch had via
+        // its `default`).
+        var emit = emitRegistry.get(node.viewType);
+        if (emit != null) {
+            return emit(node, buildEmitCtx(lines, depth));
+        }
+        return generateGenericControl(node, lines, depth);
+    }
+
+    /** Wire UIBuilder's mutable globals + helpers into the immutable
+        record a migrated widget's `wuiEmit` expects. Cheap to build
+        per-node — these are all closures over file-scope state, not
+        the state itself. */
+    static function buildEmitCtx(lines:Array<String>, depth:Int):wui.macros.PrimitiveCtx.EmitCtx {
+        return {
+            lines: lines,
+            depth: depth,
+            nextVar: nextVar,
+            emitChild: (child:ViewNode) -> generateNode(child, lines, depth + 1),
+            // `applyModifiers` internally takes the lines array too; bind it
+            // here so widgets see the 3-arg signature in the ctx contract.
+            applyModifiers: (varName, type, mods) -> applyModifiers(varName, type, mods, lines),
+            pushStateBinding: (b) -> stateBindings.push(b),
+            cppId: cppId,
+            escapeWideString: escapeWideString,
+            stateFields: stateFields,
         };
-    }
-
-    static function generateStackPanel(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("panel");
-        lines.push('winrt_controls::StackPanel $varName;');
-
-        // Set orientation
-        var orientation = node.properties.get("orientation");
-        if (orientation == "Horizontal") {
-            lines.push('$varName.Orientation(winrt_controls::Orientation::Horizontal);');
-        } else {
-            lines.push('$varName.Orientation(winrt_controls::Orientation::Vertical);');
-        }
-
-        // Set spacing
-        var spacing = node.properties.get("spacing");
-        if (spacing != null) {
-            lines.push('$varName.Spacing($spacing);');
-        }
-
-        // Apply modifiers
-        applyModifiers(varName, "StackPanel", node.modifiers, lines);
-
-        // Generate children
-        for (child in node.children) {
-            var childVar = generateNode(child, lines, depth + 1);
-            lines.push('$varName.Children().Append($childVar);');
-        }
-
-        return varName;
-    }
-
-    static function generateGrid(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("grid");
-        lines.push('winrt_controls::Grid $varName;');
-
-        applyModifiers(varName, "Grid", node.modifiers, lines);
-
-        // For ZStack (overlapping), all children go in the same cell
-        for (child in node.children) {
-            var childVar = generateNode(child, lines, depth + 1);
-            lines.push('$varName.Children().Append($childVar);');
-        }
-
-        return varName;
-    }
-
-    static function generateTextBlock(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("text");
-        lines.push('winrt_controls::TextBlock $varName;');
-
-        var text = node.properties.get("text");
-        var boundState = node.properties.get("boundState");
-        var boundFormat = node.properties.get("boundFormat");
-
-        if (boundState != null) {
-            // When a state binding exists we set the initial Text via
-            // the SAME format string the change-listener uses, so the
-            // widget reflects the *current* C++ value at construction
-            // (not the macro-time stateInitialText approximation, which
-            // would freeze e.g. a composite Int field at "0").
-            var stateName = Std.string(boundState);
-            var format = boundFormat != null ? Std.string(boundFormat) : '$varName.Text(wui::runtime::toHString(s_${cppId(stateName)}));';
-            format = StringTools.replace(format, "CTRL", varName);
-            lines.push(format);
-            stateBindings.push({
-                stateName: stateName,
-                controlVar: varName,
-                format: format
-            });
-        } else if (text != null) {
-            var escaped = escapeWideString(Std.string(text));
-            lines.push('$varName.Text(L"$escaped");');
-        }
-
-        // Auto-bind: if text matches a state field's initial value, bind it
-        if (boundState == null && stateFields.length > 0 && text != null) {
-            var textStr = Std.string(text);
-            for (sf in stateFields) {
-                if (textStr == sf.initial || textStr == Std.string(Std.parseInt(sf.initial))) {
-                    stateBindings.push({
-                        stateName: sf.name,
-                        controlVar: varName,
-                        format: '$varName.Text(winrt::hstring(std::to_wstring(s_${cppId(sf.name)})));'
-                    });
-                    break;
-                }
-            }
-        }
-
-        applyModifiers(varName, "TextBlock", node.modifiers, lines);
-
-        return varName;
-    }
-
-    static function generateButton(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("btn");
-        lines.push('winrt_controls::Button $varName;');
-
-        var label = node.properties.get("label");
-        if (label != null) {
-            var escaped = escapeWideString(Std.string(label));
-            lines.push('$varName.Content(winrt::box_value(L"$escaped"));');
-        }
-
-        // Click handler — from onClick property, StateAction, or auto-detected state action
-        var onClick = node.properties.get("onClick");
-        if (onClick != null) {
-            var code = Std.string(onClick);
-            lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    $code');
-            lines.push('});');
-        }
-
-        var action = node.properties.get("action");
-        if (action != null) {
-            var actionCode = generateStateActionCode(action);
-            lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    $actionCode');
-            lines.push('});');
-        }
-
-        // Auto-wire: if there are state fields and no explicit handler, detect by label
-        if (onClick == null && action == null && stateFields.length > 0) {
-            var sf = stateFields[0]; // use first state field
-            var labelStr = label != null ? Std.string(label) : "";
-            var clickCode:String = null;
-
-            if (labelStr == "+" || labelStr == "Increment" || labelStr == "+ Increment") {
-                clickCode = 's_${cppId(sf.name)}++; notify_${cppId(sf.name)}();';
-            } else if (labelStr == "-" || labelStr == "Decrement" || labelStr == "- Decrement") {
-                clickCode = 's_${cppId(sf.name)}--; notify_${cppId(sf.name)}();';
-            } else if (labelStr == "Reset") {
-                clickCode = 's_${cppId(sf.name)} = ${sf.initial}; notify_${cppId(sf.name)}();';
-            }
-
-            if (clickCode != null) {
-                lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-                lines.push('    $clickCode');
-                lines.push('});');
-            }
-        }
-
-        applyModifiers(varName, "Button", node.modifiers, lines);
-
-        return varName;
-    }
-
-    static function generateTextBox(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("textBox");
-        lines.push('winrt_controls::TextBox $varName;');
-
-        var placeholder = node.properties.get("placeholder");
-        if (placeholder != null) {
-            var escaped = escapeWideString(Std.string(placeholder));
-            lines.push('$varName.PlaceholderText(L"$escaped");');
-        }
-
-        // Two-way binding to state
-        var boundState = node.properties.get("boundState");
-        if (boundState != null) {
-            var stateName = Std.string(boundState);
-            // Set initial value
-            lines.push('$varName.Text(winrt::hstring(s_${cppId(stateName)}));');
-            // TextBox → state (on text change)
-            lines.push('$varName.TextChanged([](winrt::Windows::Foundation::IInspectable const& sender, winrt_controls::TextChangedEventArgs const&) {');
-            lines.push('    auto h = sender.as<winrt_controls::TextBox>().Text();');
-            lines.push('    s_${cppId(stateName)} = std::wstring(h.c_str(), h.size());');
-            lines.push('    notify_${cppId(stateName)}();');
-            lines.push('});');
-            // State → TextBox
-            stateBindings.push({
-                stateName: stateName,
-                controlVar: varName,
-                format: 'if ($varName.Text() != winrt::hstring(s_${cppId(stateName)})) $varName.Text(winrt::hstring(s_${cppId(stateName)}));'
-            });
-        }
-
-        applyModifiers(varName, "TextBox", node.modifiers, lines);
-        return varName;
-    }
-
-    static function generateToggleSwitch(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("toggle");
-        lines.push('winrt_controls::ToggleSwitch $varName;');
-
-        var label = node.properties.get("label");
-        if (label != null) {
-            var escaped = escapeWideString(Std.string(label));
-            lines.push('$varName.Header(winrt::box_value(L"$escaped"));');
-        }
-
-        // Two-way binding to state
-        var boundState = node.properties.get("boundState");
-        if (boundState != null) {
-            var stateName = Std.string(boundState);
-            lines.push('$varName.IsOn(s_${cppId(stateName)});');
-            lines.push('$varName.Toggled([](winrt::Windows::Foundation::IInspectable const& sender, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    s_${cppId(stateName)} = sender.as<winrt_controls::ToggleSwitch>().IsOn();');
-            lines.push('    notify_${cppId(stateName)}();');
-            lines.push('});');
-            stateBindings.push({
-                stateName: stateName,
-                controlVar: varName,
-                format: '$varName.IsOn(s_${cppId(stateName)});'
-            });
-        }
-
-        applyModifiers(varName, "ToggleSwitch", node.modifiers, lines);
-        return varName;
-    }
-
-    static function generateSlider(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("slider");
-        lines.push('winrt_controls::Slider $varName;');
-
-        var min = node.properties.get("min");
-        var max = node.properties.get("max");
-        if (min != null) lines.push('$varName.Minimum($min);');
-        if (max != null) lines.push('$varName.Maximum($max);');
-
-        var step = node.properties.get("step");
-        if (step != null) lines.push('$varName.StepFrequency($step);');
-
-        // Two-way binding to state
-        var boundState = node.properties.get("boundState");
-        if (boundState != null) {
-            var stateName = Std.string(boundState);
-            lines.push('$varName.Value(static_cast<double>(s_${cppId(stateName)}));');
-            lines.push('$varName.ValueChanged([](winrt::Windows::Foundation::IInspectable const&, winrt_controls::Primitives::RangeBaseValueChangedEventArgs const& e) {');
-            lines.push('    s_${cppId(stateName)} = static_cast<int>(e.NewValue());');
-            lines.push('    notify_${cppId(stateName)}();');
-            lines.push('});');
-            stateBindings.push({
-                stateName: stateName,
-                controlVar: varName,
-                format: '$varName.Value(static_cast<double>(s_${cppId(stateName)}));'
-            });
-        }
-
-        applyModifiers(varName, "Slider", node.modifiers, lines);
-        return varName;
-    }
-
-    static function generateImage(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("img");
-        lines.push('winrt_controls::Image $varName;');
-
-        var source = node.properties.get("source");
-        if (source != null) {
-            var escaped = escapeWideString(Std.string(source));
-            lines.push('{');
-            lines.push('    winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bmp;');
-            lines.push('    bmp.UriSource(winrt::Windows::Foundation::Uri(L"$escaped"));');
-            lines.push('    $varName.Source(bmp);');
-            lines.push('}');
-        }
-
-        applyModifiers(varName, "Image", node.modifiers, lines);
-        return varName;
-    }
-
-    static function generateScrollViewer(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("scroll");
-        lines.push('winrt_controls::ScrollViewer $varName;');
-
-        if (node.children.length > 0) {
-            var contentVar = generateNode(node.children[0], lines, depth + 1);
-            lines.push('$varName.Content($contentVar);');
-        }
-
-        applyModifiers(varName, "ScrollViewer", node.modifiers, lines);
-        return varName;
-    }
-
-    static function generateCheckBox(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("cb");
-        lines.push('winrt_controls::CheckBox $varName;');
-
-        var label = node.properties.get("label");
-        if (label != null) {
-            var escaped = escapeWideString(Std.string(label));
-            lines.push('$varName.Content(winrt::box_value(L"$escaped"));');
-        }
-
-        // Two-way binding to state
-        var boundState = node.properties.get("boundState");
-        if (boundState != null) {
-            var stateName = Std.string(boundState);
-            lines.push('$varName.IsChecked(s_${cppId(stateName)});');
-            lines.push('$varName.Checked([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    s_${cppId(stateName)} = true; notify_${cppId(stateName)}();');
-            lines.push('});');
-            lines.push('$varName.Unchecked([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    s_${cppId(stateName)} = false; notify_${cppId(stateName)}();');
-            lines.push('});');
-            stateBindings.push({
-                stateName: stateName,
-                controlVar: varName,
-                format: '$varName.IsChecked(s_${cppId(stateName)});'
-            });
-        }
-
-        applyModifiers(varName, "CheckBox", node.modifiers, lines);
-        return varName;
-    }
-
-    static function generateProgressRing(node:ViewNode, lines:Array<String>, depth:Int):String {
-        var varName = nextVar("prog");
-        lines.push('winrt_controls::ProgressRing $varName;');
-
-        var isIndeterminate = node.properties.get("isIndeterminate");
-        if (isIndeterminate == "true" || isIndeterminate == true) {
-            lines.push('$varName.IsIndeterminate(true);');
-        } else {
-            lines.push('$varName.IsIndeterminate(false);');
-            var value = node.properties.get("value");
-            if (value != null) lines.push('$varName.Value($value);');
-        }
-
-        applyModifiers(varName, "ProgressRing", node.modifiers, lines);
-        return varName;
-    }
-
-    static function generateSpacer(node:ViewNode, lines:Array<String>, depth:Int):String {
-        // Spacer is implemented as a Grid row/column that expands
-        var varName = nextVar("spacer");
-        lines.push('winrt_controls::Border $varName;');
-        lines.push('$varName.HorizontalAlignment(winrt_xaml::HorizontalAlignment::Stretch);');
-        lines.push('$varName.VerticalAlignment(winrt_xaml::VerticalAlignment::Stretch);');
-
-        var minSize = node.properties.get("minSize");
-        if (minSize != null) {
-            lines.push('$varName.MinWidth($minSize);');
-            lines.push('$varName.MinHeight($minSize);');
-        }
-
-        return varName;
     }
 
     static function generateGenericControl(node:ViewNode, lines:Array<String>, depth:Int):String {
@@ -1009,7 +725,7 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
         }
     }
 
-    static function generateStateActionCode(action:Dynamic):String {
+    public static function generateStateActionCode(action:Dynamic):String {
         // Generates C++ code for a StateAction
         // This will be expanded as the state system matures
         return "// StateAction: TODO";

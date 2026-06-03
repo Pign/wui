@@ -40,6 +40,33 @@ class WinUIGenerator {
         is a plain list. Names are unique within the build. */
     static var lambdaRegistry:Array<{name:String, body:haxe.macro.Type.TypedExpr}> = [];
 
+    /** Accessors needed by emitted ForEach widgets — one entry per
+        unique (stateName, fieldName) pair. Each gets a static method on
+        `wui.generated.ForEachAccessor`: `<state>_field_<field>(i:Int):String`
+        (string-only for the MVP). Length helpers are tracked separately. */
+    public static var foreachAccessorFields:Map<String, {stateName:String, fieldName:String, fieldType:String}> = new Map();
+    public static var foreachAccessorLengths:Map<String, Bool> = new Map();
+
+    /**
+     * Per-class analyze functions registered by primitive widget
+     * classes. See `wui.macros.PrimitiveCtx` for the contract.
+     *
+     * Keyed by the fully-qualified Haxe class name (e.g.
+     * `wui.ui.VStack`), the same key `analyzeNewExpr` already
+     * computes via `cls.pack.join(".") + "." + cls.name`. Consulted
+     * BEFORE the legacy switch; the switch is being drained one
+     * widget at a time as primitives migrate.
+     */
+    public static var primitiveRegistry:Map<String, Array<haxe.macro.Type.TypedExpr> -> wui.macros.PrimitiveCtx.AnalyzeCtx -> wui.macros.UIBuilder.ViewNode> = new Map();
+
+    /** Register a primitive widget's analyze function under its
+        fully-qualified class name. Called from `register()` once per
+        framework primitive; user widgets can register from their own
+        `#if macro` blocks via the same API. */
+    public static function registerPrimitive(fqClassName:String, fn:Array<haxe.macro.Type.TypedExpr> -> wui.macros.PrimitiveCtx.AnalyzeCtx -> wui.macros.UIBuilder.ViewNode):Void {
+        primitiveRegistry.set(fqClassName, fn);
+    }
+
     /**
      * Call this from build.hxml:
      *   --macro wui.macros.WinUIGenerator.register()
@@ -47,6 +74,43 @@ class WinUIGenerator {
     public static function register():Void {
         if (registered) return;
         registered = true;
+
+        // Wire up framework primitives that have migrated to the
+        // self-emit pattern. Each one contributes (a) its analyze
+        // function under its FQ class name, and (b) optionally an
+        // emit function under its viewType. Re-registration is a
+        // no-op (last wins), so widgets that share a viewType (e.g.
+        // HStack ↔ VStack both StackPanel) only need to register
+        // their analyze and can share an emit.
+        registerPrimitive("wui.ui.VStack",       wui.ui.VStack.wuiAnalyze);
+        registerPrimitive("wui.ui.HStack",       wui.ui.HStack.wuiAnalyze);
+        registerPrimitive("wui.ui.ZStack",       wui.ui.ZStack.wuiAnalyze);
+        registerPrimitive("wui.ui.Text",         wui.ui.Text.wuiAnalyze);
+        registerPrimitive("wui.ui.Button",       wui.ui.Button.wuiAnalyze);
+        registerPrimitive("wui.ui.Spacer",       wui.ui.Spacer.wuiAnalyze);
+        registerPrimitive("wui.ui.TextBox",      wui.ui.TextBox.wuiAnalyze);
+        registerPrimitive("wui.ui.ToggleSwitch", wui.ui.ToggleSwitch.wuiAnalyze);
+        registerPrimitive("wui.ui.CheckBox",     wui.ui.CheckBox.wuiAnalyze);
+        registerPrimitive("wui.ui.Slider",       wui.ui.Slider.wuiAnalyze);
+        registerPrimitive("wui.ui.Image",        wui.ui.Image.wuiAnalyze);
+        registerPrimitive("wui.ui.ScrollViewer", wui.ui.ScrollViewer.wuiAnalyze);
+        registerPrimitive("wui.ui.ProgressRing", wui.ui.ProgressRing.wuiAnalyze);
+        registerPrimitive("wui.ui.ForEach",      wui.ui.ForEach.wuiAnalyze);
+        registerPrimitive("wui.ui.Show",         wui.ui.Show.wuiAnalyze);
+        UIBuilder.registerEmitter("StackPanel",   wui.ui.VStack.wuiEmit);
+        UIBuilder.registerEmitter("Grid",         wui.ui.ZStack.wuiEmit);
+        UIBuilder.registerEmitter("TextBlock",    wui.ui.Text.wuiEmit);
+        UIBuilder.registerEmitter("Button",       wui.ui.Button.wuiEmit);
+        UIBuilder.registerEmitter("Spacer",       wui.ui.Spacer.wuiEmit);
+        UIBuilder.registerEmitter("TextBox",      wui.ui.TextBox.wuiEmit);
+        UIBuilder.registerEmitter("ToggleSwitch", wui.ui.ToggleSwitch.wuiEmit);
+        UIBuilder.registerEmitter("CheckBox",     wui.ui.CheckBox.wuiEmit);
+        UIBuilder.registerEmitter("Slider",       wui.ui.Slider.wuiEmit);
+        UIBuilder.registerEmitter("Image",        wui.ui.Image.wuiEmit);
+        UIBuilder.registerEmitter("ScrollViewer", wui.ui.ScrollViewer.wuiEmit);
+        UIBuilder.registerEmitter("ProgressRing", wui.ui.ProgressRing.wuiEmit);
+        UIBuilder.registerEmitter("ForEach",      wui.ui.ForEach.wuiEmit);
+        UIBuilder.registerEmitter("Show",         wui.ui.Show.wuiEmit);
 
         // Collect types AND run the analysis during typing — this is
         // crucial because `Context.defineType` (used by
@@ -101,6 +165,7 @@ class WinUIGenerator {
         cachedTitleBarTree = buildTitleBarTree(appType);
         collectEffects(appType);
         emitCallbackModule();
+        emitForEachAccessorModule();
         // Note: state read/write from Haxe lambdas goes through the
         // stable `wui.state.StateBridge` class in the wui lib. The
         // per-type dispatch functions it calls are emitted by UIBuilder
@@ -245,8 +310,8 @@ class WinUIGenerator {
     }
 
     static function appendPrimitiveStateField(field:ClassField, paramType:Type, name:String, out:Array<{name:String, type:String, initial:String}>):Void {
-        var cppType = "int";
-        var initial = "0";
+        var cppType:String = null;
+        var initial:String = null;
 
         var explicitInitial:String = null;
         for (m in field.meta.get()) {
@@ -268,6 +333,12 @@ class WinUIGenerator {
                 }
             default:
         }
+        // Immutable-typed State<T> (e.g. State<ImmutableList<Email>>) has
+        // no C++-side payload — the list lives Haxe-side, only the
+        // companion `<name>__v:Int` trigger gets registered. We bail out
+        // here when the inner T isn't a recognised primitive so we don't
+        // emit a bogus `s_inbox` static.
+        if (cppType == null) return;
         out.push({ name: name, type: cppType, initial: initial });
     }
 
@@ -757,142 +828,243 @@ class WinUIGenerator {
     static function analyzeNewExpr(cls:ClassType, args:Array<TypedExpr>):ViewNode {
         var fullName = cls.pack.join(".") + (cls.pack.length > 0 ? "." : "") + cls.name;
 
-        return switch (fullName) {
-            case "wui.ui.VStack":
-                var children = args.length > 0 ? extractChildArray(args[0]) : [];
-                var spacing = args.length > 1 ? extractFloatValue(args[1]) : null;
-                var props:Map<String, Dynamic> = new Map();
-                props.set("orientation", "Vertical");
-                if (spacing != null) props.set("spacing", spacing);
-                { viewType: "StackPanel", children: children, modifiers: [], properties: props };
+        // First : framework primitives have explicit entries in the
+        // registry (wired in `register()`), each owns its `wuiAnalyze`.
+        var analyzeFn = primitiveRegistry.get(fullName);
+        if (analyzeFn != null) {
+            return analyzeFn(args, buildAnalyzeCtx());
+        }
 
-            case "wui.ui.HStack":
-                var children = args.length > 0 ? extractChildArray(args[0]) : [];
-                var spacing = args.length > 1 ? extractFloatValue(args[1]) : null;
-                var props:Map<String, Dynamic> = new Map();
-                props.set("orientation", "Horizontal");
-                if (spacing != null) props.set("spacing", spacing);
-                { viewType: "StackPanel", children: children, modifiers: [], properties: props };
+        // Phase 3 : user components — any class extending `wui.View`
+        // that overrides `body()` is inlined here. Constructor args
+        // are substituted into the body's `this.<field>` references
+        // and the resulting expression is re-analysed as if the user
+        // had written it directly. Lets the app factor its UI into
+        // reusable components without polluting the framework with
+        // app-specific styling.
+        if (extendsView(cls)) {
+            var inlined = inlineUserBody(cls, args);
+            if (inlined != null) return inlined;
+        }
 
-            case "wui.ui.ZStack":
-                var children = args.length > 0 ? extractChildArray(args[0]) : [];
-                { viewType: "Grid", children: children, modifiers: [], properties: new Map() };
+        return defaultNode();
+    }
 
-            case "wui.ui.Text":
-                var props:Map<String, Dynamic> = new Map();
-                // Check for state-bound text (e.g., "Count: " + count)
-                var textArg = args.length > 0 ? args[0] : null;
-                // Resolve local variable if needed
-                if (textArg != null) {
-                    switch (textArg.expr) {
-                        case TLocal(v):
-                            var resolved = localExprs.get(v.name);
-                            if (resolved != null) textArg = resolved;
-                        default:
+    /** Walk a class chain looking for `wui.View` as ancestor. */
+    static function extendsView(cls:ClassType):Bool {
+        var cur = cls;
+        while (cur != null) {
+            if (cur.pack.length == 1 && cur.pack[0] == "wui" && cur.name == "View") return true;
+            if (cur.superClass == null) return false;
+            cur = cur.superClass.t.get();
+        }
+        return false;
+    }
+
+    /** Phase 3 inlining. Walks the user component's `body()` typed AST,
+        substitutes `this.<field>` references with the matching
+        constructor argument, and feeds the result back into
+        `analyzeBodyExpr`. Returns `null` if the component doesn't fit
+        the supported shape (no body method, body() returns void, ctor
+        doesn't store params into same-named fields, …) — caller falls
+        back to `defaultNode()` in that case. */
+    static function inlineUserBody(cls:ClassType, args:Array<TypedExpr>):ViewNode {
+        var bodyField:ClassField = null;
+        for (f in cls.fields.get()) {
+            if (f.name == "body") { bodyField = f; break; }
+        }
+        if (bodyField == null) return null;
+        var bodyExpr = bodyField.expr();
+        if (bodyExpr == null) return null;
+
+        // Build the param-to-field substitution from the constructor.
+        // We only support `this.X = paramName;` assignments for now —
+        // anything more elaborate (transforms, conditional init)
+        // falls back to the empty substitution and the body keeps its
+        // original `this.X` references, which then fail to resolve at
+        // the call site. Document the constraint when migrating user
+        // components.
+        var subst:Map<String, TypedExpr> = new Map();
+        var ctor = cls.constructor;
+        if (ctor != null && args.length > 0) {
+            var ctorField = ctor.get();
+            var ctorExpr = ctorField.expr();
+            if (ctorExpr != null) {
+                var ctorParams:Array<String> = [];
+                switch (ctorField.type) {
+                    case TFun(params, _):
+                        for (p in params) ctorParams.push(p.name);
+                    default:
+                }
+                var fieldToParam:Map<String, String> = new Map();
+                walkCtorBody(ctorExpr, fieldToParam);
+                for (fname in fieldToParam.keys()) {
+                    var pname = fieldToParam.get(fname);
+                    var idx = -1;
+                    for (i in 0...ctorParams.length) {
+                        if (ctorParams[i] == pname) { idx = i; break; }
+                    }
+                    if (idx >= 0 && idx < args.length) {
+                        subst.set(fname, args[idx]);
                     }
                 }
-                var bound = textArg != null ? extractStateBoundText(textArg) : null;
-                if (bound != null) {
-                    props.set("text", bound.text);
-                    props.set("boundState", bound.boundState);
-                    props.set("boundFormat", bound.format);
-                } else {
-                    var text = args.length > 0 ? extractStringOrExpr(args[0]) : "Text";
-                    props.set("text", text);
-                }
-                { viewType: "TextBlock", children: [], modifiers: [], properties: props };
+            }
+        }
 
-            case "wui.ui.Button":
-                var label = args.length > 0 ? extractStringOrExpr(args[0]) : "Button";
-                var props:Map<String, Dynamic> = new Map();
-                props.set("label", label);
-                // args[1] = icon (optional), args[2] = action (StateAction)
-                if (args.length > 2) {
-                    var actionCode = extractStateAction(args[2]);
-                    if (actionCode != null) {
-                        props.set("onClick", actionCode);
+        var bodyReturn = extractReturnExpr(bodyExpr);
+        if (bodyReturn == null) return null;
+        var substituted = substituteThisFields(bodyReturn, subst);
+        return analyzeBodyExpr(substituted);
+    }
+
+    /** Same as `inlineUserBody` but returns the substituted typed
+        expression instead of a ViewNode. Lets other analyzers (e.g.
+        `ForEach.wuiAnalyze` for its template body) continue their
+        own pattern matching on the inlined tree rather than going
+        straight to `analyzeBodyExpr`. */
+    public static function inlineUserBodyExpr(cls:ClassType, args:Array<TypedExpr>):TypedExpr {
+        var bodyField:ClassField = null;
+        for (f in cls.fields.get()) {
+            if (f.name == "body") { bodyField = f; break; }
+        }
+        if (bodyField == null) return null;
+        var bodyExpr = bodyField.expr();
+        if (bodyExpr == null) return null;
+
+        var subst:Map<String, TypedExpr> = new Map();
+        var ctor = cls.constructor;
+        if (ctor != null && args.length > 0) {
+            var ctorField = ctor.get();
+            var ctorExpr = ctorField.expr();
+            if (ctorExpr != null) {
+                var ctorParams:Array<String> = [];
+                switch (ctorField.type) {
+                    case TFun(params, _):
+                        for (p in params) ctorParams.push(p.name);
+                    default:
+                }
+                var fieldToParam:Map<String, String> = new Map();
+                walkCtorBody(ctorExpr, fieldToParam);
+                for (fname in fieldToParam.keys()) {
+                    var pname = fieldToParam.get(fname);
+                    var idx = -1;
+                    for (i in 0...ctorParams.length) {
+                        if (ctorParams[i] == pname) { idx = i; break; }
+                    }
+                    if (idx >= 0 && idx < args.length) {
+                        subst.set(fname, args[idx]);
                     }
                 }
-                { viewType: "Button", children: [], modifiers: [], properties: props };
+            }
+        }
 
-            case "wui.ui.Spacer":
-                var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) {
-                    var minSize = extractFloatValue(args[0]);
-                    if (minSize != null) props.set("minSize", minSize);
-                }
-                { viewType: "Spacer", children: [], modifiers: [], properties: props };
+        var bodyReturn = extractReturnExpr(bodyExpr);
+        if (bodyReturn == null) return null;
+        return substituteThisFields(bodyReturn, subst);
+    }
 
-            case "wui.ui.TextBox":
-                var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) {
-                    var placeholder = extractStringOrExpr(args[0]);
-                    if (placeholder != null) props.set("placeholder", placeholder);
-                }
-                if (args.length > 1) {
-                    var stateRef = deepExtractStateRef(args[1]);
-                    if (stateRef != null) props.set("boundState", stateRef);
-                }
-                { viewType: "TextBox", children: [], modifiers: [], properties: props };
+    /** Public alias of `extendsView` so other macro modules
+        (notably `wui.ui.ForEach`) can guard their Phase-3 inlining. */
+    public static function isUserViewComponent(cls:ClassType):Bool {
+        return extendsView(cls);
+    }
 
-            case "wui.ui.ToggleSwitch":
-                var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) {
-                    var label = extractStringOrExpr(args[0]);
-                    if (label != null) props.set("label", label);
-                }
-                if (args.length > 1) {
-                    var stateRef = deepExtractStateRef(args[1]);
-                    if (stateRef != null) props.set("boundState", stateRef);
-                }
-                { viewType: "ToggleSwitch", children: [], modifiers: [], properties: props };
+    /** Public alias of `extractModifier` for cross-module reuse —
+        `ForEach.analyzeTextChild` walks modifier chains on its Text
+        rows and needs the same name→ModifierData conversion. */
+    public static function modifierFromCall(name:String, args:Array<TypedExpr>):ModifierData {
+        return extractModifier(name, args);
+    }
 
-            case "wui.ui.CheckBox":
-                var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) {
-                    var label = extractStringOrExpr(args[0]);
-                    if (label != null) props.set("label", label);
+    /** Recursively scan ctor body for `this.<field> = <localParam>`
+        and populate `out` with `<field> -> <localParamName>`. Only
+        TLocal RHS counts — `this.X = compute()` doesn't qualify
+        because we can't trace the value back to a ctor argument. */
+    static function walkCtorBody(e:TypedExpr, out:Map<String, String>):Void {
+        if (e == null) return;
+        switch (e.expr) {
+            case TBinop(OpAssign, lhs, rhs):
+                switch (lhs.expr) {
+                    case TField(receiver, fa):
+                        var isThis = switch (receiver.expr) {
+                            case TConst(TThis): true;
+                            default: false;
+                        };
+                        if (isThis) {
+                            var fieldName = switch (fa) {
+                                case FInstance(_, _, cf): cf.get().name;
+                                default: null;
+                            };
+                            if (fieldName != null) {
+                                switch (rhs.expr) {
+                                    case TLocal(v): out.set(fieldName, v.name);
+                                    default:
+                                }
+                            }
+                        }
+                    default:
                 }
-                if (args.length > 1) {
-                    var stateRef = deepExtractStateRef(args[1]);
-                    if (stateRef != null) props.set("boundState", stateRef);
-                }
-                { viewType: "CheckBox", children: [], modifiers: [], properties: props };
-
-            case "wui.ui.Slider":
-                var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) props.set("min", extractFloatValue(args[0]));
-                if (args.length > 1) props.set("max", extractFloatValue(args[1]));
-                // args[2] = binding, args[3] = step
-                if (args.length > 2) {
-                    var stateRef = deepExtractStateRef(args[2]);
-                    if (stateRef != null) props.set("boundState", stateRef);
-                }
-                if (args.length > 3) props.set("step", extractFloatValue(args[3]));
-                { viewType: "Slider", children: [], modifiers: [], properties: props };
-
-            case "wui.ui.Image":
-                var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) props.set("source", extractStringOrExpr(args[0]));
-                { viewType: "Image", children: [], modifiers: [], properties: props };
-
-            case "wui.ui.ScrollViewer":
-                var children = args.length > 0 ? [analyzeBodyExpr(args[0])] : [];
-                { viewType: "ScrollViewer", children: children, modifiers: [], properties: new Map() };
-
-            case "wui.ui.ProgressRing":
-                var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) {
-                    props.set("value", extractFloatValue(args[0]));
-                    props.set("isIndeterminate", "false");
-                } else {
-                    props.set("isIndeterminate", "true");
-                }
-                { viewType: "ProgressRing", children: [], modifiers: [], properties: props };
-
             default:
-                defaultNode();
-        };
+        }
+        haxe.macro.TypedExprTools.iter(e, function(c) walkCtorBody(c, out));
+    }
+
+    /** Body() in user code typically wraps its return in a `TBlock`
+        with a single `TReturn`. Unwrap layers until we reach the
+        actual View constructor expression. */
+    static function extractReturnExpr(e:TypedExpr):TypedExpr {
+        if (e == null) return null;
+        switch (e.expr) {
+            case TFunction(tf):
+                // `field.expr()` sur un FMethod renvoie le TypedExpr
+                // wrappant la fonction entière (TFunction avec args + body).
+                // On descend dans le body — sinon les callers qui matchent
+                // sur TNew(...) du body voient TFunction et tombent.
+                return extractReturnExpr(tf.expr);
+            case TBlock(exprs):
+                var i = exprs.length - 1;
+                while (i >= 0) {
+                    var sub = extractReturnExpr(exprs[i]);
+                    if (sub != null) return sub;
+                    i--;
+                }
+                return null;
+            case TReturn(inner):
+                return inner == null ? null : extractReturnExpr(inner);
+            case TMeta(_, inner):
+                return extractReturnExpr(inner);
+            case TParenthesis(inner):
+                return extractReturnExpr(inner);
+            default:
+                return e;
+        }
+    }
+
+    /** Replace `this.<field>` accesses with their substituted value
+        from the caller's args. Uses `TypedExprTools.map` so the new
+        tree keeps type information intact — that's why we don't
+        round-trip through Expr/typeExpr (the resulting expressions
+        feed directly back into `analyzeBodyExpr`). */
+    static function substituteThisFields(e:TypedExpr, subst:Map<String, TypedExpr>):TypedExpr {
+        if (e == null) return null;
+        switch (e.expr) {
+            case TField(receiver, fa):
+                var isThis = switch (receiver.expr) {
+                    case TConst(TThis): true;
+                    default: false;
+                };
+                if (isThis) {
+                    var fieldName = switch (fa) {
+                        case FInstance(_, _, cf): cf.get().name;
+                        default: null;
+                    };
+                    if (fieldName != null && subst.exists(fieldName)) {
+                        return subst.get(fieldName);
+                    }
+                }
+            default:
+        }
+        return haxe.macro.TypedExprTools.map(e, function(c) return substituteThisFields(c, subst));
     }
 
     /**
@@ -999,6 +1171,23 @@ class WinUIGenerator {
     }
 
     // ---- Value Extraction Helpers ----
+
+    /** Wire WinUIGenerator's static analyze helpers into the immutable
+        record a migrated widget's `wuiAnalyze` expects. Single-shot,
+        cheap to construct — these are all references to closures over
+        the file-scope state. */
+    static function buildAnalyzeCtx():wui.macros.PrimitiveCtx.AnalyzeCtx {
+        return {
+            recurseChild: analyzeBodyExpr,
+            recurseChildren: extractChildArray,
+            extractString: extractStringOrExpr,
+            extractFloat: extractFloatValue,
+            extractStateBoundText: extractStateBoundText,
+            extractStateRef: deepExtractStateRef,
+            extractStateAction: extractStateAction,
+            defaultNode: defaultNode,
+        };
+    }
 
     static function extractChildArray(expr:TypedExpr):Array<ViewNode> {
         if (expr == null) return [];
@@ -1611,6 +1800,78 @@ class WinUIGenerator {
         var all = [for (n in callbackRegistry) n];
         for (e in lambdaRegistry) all.push(e.name);
         UIBuilder.exposedCallbacks = all;
+    }
+
+    /** Emit `wui.generated.ForEachAccessor` — one static method per
+        unique `(stateName, fieldName)` pair surfaced by a ForEach
+        widget, plus one `<state>_length()` per ForEach'd state. The
+        C++ rebuild function in MainWindow.cpp calls these via
+        `::wui::generated::ForEachAccessor_obj::inbox_field_from(i)`,
+        i.e. the same hxcpp qualified-name path as Callbacks.
+
+        Each accessor walks the State registry (no per-app singleton:
+        `State.getByName` is enough) and pulls the requested field via
+        Dynamic field access — that works for both class instances and
+        anonymous-typedef rows (which is what `EmailRow` is). */
+    static function emitForEachAccessorModule():Void {
+        var hasAny = Lambda.count(foreachAccessorFields) > 0 || Lambda.count(foreachAccessorLengths) > 0;
+        if (!hasAny) return;
+
+        var pos = haxe.macro.Context.currentPos();
+        var fields:Array<haxe.macro.Expr.Field> = [];
+
+        for (stateName in foreachAccessorLengths.keys()) {
+            var lengthBody = '{ var s:wui.state.State<wui.state.ImmutableList<Dynamic>> = cast wui.state.State.getByName("' + stateName + '"); if (s == null || s.value == null) return 0; return s.value.length; }';
+            fields.push({
+                name: stateName + "_length",
+                pos: pos,
+                meta: [{ name: ":keep", pos: pos }],
+                access: [APublic, AStatic],
+                kind: FFun({
+                    args: [],
+                    ret: macro :Int,
+                    expr: haxe.macro.Context.parse(lengthBody, pos)
+                })
+            });
+        }
+
+        for (key in foreachAccessorFields.keys()) {
+            var info = foreachAccessorFields.get(key);
+            var stateName = info.stateName;
+            var fieldName = info.fieldName;
+            // String-only for MVP. The accessor pulls the row out of the
+            // ImmutableList<Dynamic>, then uses Reflect-style field
+            // access — works for anonymous-typedef rows like EmailRow.
+            var body =
+                '{ var s:wui.state.State<wui.state.ImmutableList<Dynamic>> = cast wui.state.State.getByName("' + stateName + '");'
+              + ' if (s == null || s.value == null || i < 0 || i >= s.value.length) return "";'
+              + ' var row:Dynamic = s.value.get(i);'
+              + ' if (row == null) return "";'
+              + ' var v:Dynamic = Reflect.field(row, "' + fieldName + '");'
+              + ' return v == null ? "" : Std.string(v); }';
+            fields.push({
+                name: stateName + "_field_" + fieldName,
+                pos: pos,
+                meta: [{ name: ":keep", pos: pos }],
+                access: [APublic, AStatic],
+                kind: FFun({
+                    args: [{ name: "i", type: macro :Int }],
+                    ret: macro :String,
+                    expr: haxe.macro.Context.parse(body, pos)
+                })
+            });
+        }
+
+        haxe.macro.Context.defineType({
+            pos: pos,
+            pack: ["wui", "generated"],
+            name: "ForEachAccessor",
+            kind: TDClass(),
+            fields: fields,
+            meta: [{ name: ":keep", pos: pos }]
+        });
+
+        UIBuilder.foreachAccessorPresent = true;
     }
 
     /** Plausible initial text shown before the state has been pushed for the
