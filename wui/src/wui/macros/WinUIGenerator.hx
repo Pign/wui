@@ -62,6 +62,18 @@ class WinUIGenerator {
         callback through the parametric path. */
     public static var foreachContextIdxName:Null<String> = null;
 
+    /** Set by `ForEach.wuiAnalyze` alongside `foreachContextIdxName`.
+        The TVar of the lambda's first param (the row item), used to
+        detect `item.<field>` references inside closures and rewrite
+        them as calls into `wui.generated.ForEachAccessor`. */
+    public static var foreachContextItemVar:Null<haxe.macro.Type.TVar> = null;
+
+    /** Set by `ForEach.wuiAnalyze` for the @:state field the ForEach
+        iterates over. Used to build the per-field accessor method
+        names (`<state>_field_<field>`) when a closure captures an
+        item field. */
+    public static var foreachContextStateName:Null<String> = null;
+
     /** Accessors needed by emitted ForEach widgets — one entry per
         unique (stateName, fieldName) pair. Each gets a static method on
         `wui.generated.ForEachAccessor`: `<state>_field_<field>(i:Int):String`
@@ -1920,16 +1932,48 @@ class WinUIGenerator {
                 };
             case TLocal(v):
                 // ForEach idx capture → wrapper's `idx` param.
-                // Locals declared inside the closure also carry the
-                // declared name and resolve in the wrapper scope once
-                // their TVar declarations are converted. The user
-                // catches "captured a non-idx local from outside" via
-                // the re-typing error (unknown identifier).
                 if (v.name == idxName) return mk(EConst(CIdent("idx")));
+                // Direct capture of the ForEach item var (without
+                // field access) — we can't materialise the row item
+                // as a whole inside the wrapper, only its individual
+                // fields via the accessor. Caller's re-typing will
+                // fail loudly; we surface this earlier as a null
+                // return so the fallback path triggers.
+                if (foreachContextItemVar != null && v.id == foreachContextItemVar.id) return null;
+                // Locals declared inside the closure carry the
+                // declared name and resolve once their TVar
+                // declarations are converted. Captures of other
+                // outer locals will trip Haxe's re-typing with
+                // "unknown identifier", which is the right place
+                // for the user to see the error.
                 return mk(EConst(CIdent(v.name)));
             case TField(obj, fa):
                 var name = fieldAccessName(fa);
                 if (name == null) return null;
+                // `item.<field>` access — rewrite as a call into the
+                // generated `wui.generated.ForEachAccessor` module.
+                // The accessor reads the row's field via Reflect at
+                // runtime, returning a String (the only accessor
+                // shape currently emitted).
+                switch (obj.expr) {
+                    case TLocal(v) if (foreachContextItemVar != null
+                            && v.id == foreachContextItemVar.id
+                            && foreachContextStateName != null):
+                        var stateName = foreachContextStateName;
+                        var key = stateName + "::" + name;
+                        foreachAccessorFields.set(key, {
+                            stateName: stateName,
+                            fieldName: name,
+                            fieldType: "String"
+                        });
+                        var accessorPath = pathToExpr(["wui", "generated", "ForEachAccessor"], pos);
+                        var methodName = stateName + "_field_" + name;
+                        return mk(ECall(
+                            mk(EField(accessorPath, methodName)),
+                            [mk(EConst(CIdent("idx")))]
+                        ));
+                    default:
+                }
                 switch (fa) {
                     case FStatic(cl, _):
                         return staticFieldExpr(cl.get(), name, pos);
@@ -2043,9 +2087,86 @@ class WinUIGenerator {
                 var s = closureBodyToExpr(sub, idxName);
                 if (s == null) return null;
                 return mk(EThrow(s));
+            case TWhile(cond, body, normalWhile):
+                var c = closureBodyToExpr(cond, idxName);
+                var b = closureBodyToExpr(body, idxName);
+                if (c == null || b == null) return null;
+                return mk(EWhile(c, b, normalWhile));
+            case TFor(v, it, body):
+                var itc = closureBodyToExpr(it, idxName);
+                var bc = closureBodyToExpr(body, idxName);
+                if (itc == null || bc == null) return null;
+                var ident:haxe.macro.Expr = { expr: EConst(CIdent(v.name)), pos: pos };
+                return mk(EFor({ expr: EBinop(OpIn, ident, itc), pos: pos }, bc));
+            case TSwitch(subj, cases, edef):
+                var s = closureBodyToExpr(subj, idxName);
+                if (s == null) return null;
+                var newCases:Array<haxe.macro.Expr.Case> = [];
+                for (cs in cases) {
+                    var ce = closureBodyToExpr(cs.expr, idxName);
+                    if (ce == null) return null;
+                    var vals:Array<haxe.macro.Expr> = [];
+                    for (val in cs.values) {
+                        var vc = closureBodyToExpr(val, idxName);
+                        if (vc == null) return null;
+                        vals.push(vc);
+                    }
+                    newCases.push({ values: vals, guard: null, expr: ce });
+                }
+                var newDef:Null<haxe.macro.Expr> = null;
+                if (edef != null) {
+                    newDef = closureBodyToExpr(edef, idxName);
+                    if (newDef == null) return null;
+                }
+                return mk(ESwitch(s, newCases, newDef));
+            case TTry(e, catches):
+                var be = closureBodyToExpr(e, idxName);
+                if (be == null) return null;
+                var newCatches:Array<haxe.macro.Expr.Catch> = [];
+                for (c in catches) {
+                    var ce = closureBodyToExpr(c.expr, idxName);
+                    if (ce == null) return null;
+                    var ct = haxe.macro.TypeTools.toComplexType(c.v.t);
+                    if (ct == null) return null;
+                    newCatches.push({ name: c.v.name, type: ct, expr: ce });
+                }
+                return mk(ETry(be, newCatches));
+            case TCast(e, m):
+                var be = closureBodyToExpr(e, idxName);
+                if (be == null) return null;
+                var ct:Null<haxe.macro.Expr.ComplexType> = null;
+                if (m != null) ct = moduleTypeToComplexType(m);
+                return mk(ECast(be, ct));
+            case TFunction(tf):
+                var bodyExpr = closureBodyToExpr(tf.expr, idxName);
+                if (bodyExpr == null) return null;
+                var argsConverted:Array<haxe.macro.Expr.FunctionArg> = [];
+                for (a in tf.args) {
+                    var argType = haxe.macro.TypeTools.toComplexType(a.v.t);
+                    argsConverted.push({
+                        name: a.v.name,
+                        type: argType,
+                        opt: a.value != null,
+                    });
+                }
+                var ret = haxe.macro.TypeTools.toComplexType(tf.t);
+                return mk(EFunction(FAnonymous, {
+                    args: argsConverted,
+                    ret: ret,
+                    expr: bodyExpr,
+                }));
             default:
                 return null;
         }
+    }
+
+    static function moduleTypeToComplexType(mt:haxe.macro.Type.ModuleType):haxe.macro.Expr.ComplexType {
+        return switch (mt) {
+            case TClassDecl(c): TPath({ pack: c.get().pack, name: c.get().name, params: [] });
+            case TEnumDecl(en): TPath({ pack: en.get().pack, name: en.get().name, params: [] });
+            case TTypeDecl(t):  TPath({ pack: t.get().pack,  name: t.get().name,  params: [] });
+            case TAbstract(a):  TPath({ pack: a.get().pack,  name: a.get().name,  params: [] });
+        };
     }
 
     static function fieldAccessName(fa:haxe.macro.Type.FieldAccess):Null<String> {

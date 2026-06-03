@@ -63,14 +63,18 @@ class ForEach extends View {
         }
 
         var lambdaParamName:String = null;
+        var lambdaItemVar:haxe.macro.Type.TVar = null;
         var lambdaIdxName:String = null;
         var lambdaBody:TypedExpr = null;
         switch (args[1].expr) {
             case TFunction(tf):
-                if (tf.args.length > 0) lambdaParamName = tf.args[0].v.name;
+                if (tf.args.length > 0) {
+                    lambdaParamName = tf.args[0].v.name;
+                    lambdaItemVar = tf.args[0].v;
+                }
                 // Optional second arg = row index. When provided, the
                 // ForEach codegen routes typed `(Int) -> Void` Custom
-                // callbacks (and direct `idx` references in the future)
+                // callbacks (and direct `idx` references in closures)
                 // through a parametric wrapper that receives the C++
                 // loop counter at runtime.
                 if (tf.args.length > 1) lambdaIdxName = tf.args[1].v.name;
@@ -99,7 +103,11 @@ class ForEach extends View {
         // parametric wrapper path. Reset right after.
         var rowModifiers:Array<wui.macros.UIBuilder.ModifierData> = [];
         var prevForeachIdx = wui.macros.WinUIGenerator.foreachContextIdxName;
+        var prevForeachItemVar = wui.macros.WinUIGenerator.foreachContextItemVar;
+        var prevForeachState = wui.macros.WinUIGenerator.foreachContextStateName;
         wui.macros.WinUIGenerator.foreachContextIdxName = lambdaIdxName;
+        wui.macros.WinUIGenerator.foreachContextItemVar = lambdaItemVar;
+        wui.macros.WinUIGenerator.foreachContextStateName = stateName;
         var walking = true;
         while (walking) {
             walking = false;
@@ -137,6 +145,8 @@ class ForEach extends View {
             }
         }
         wui.macros.WinUIGenerator.foreachContextIdxName = prevForeachIdx;
+        wui.macros.WinUIGenerator.foreachContextItemVar = prevForeachItemVar;
+        wui.macros.WinUIGenerator.foreachContextStateName = prevForeachState;
 
         var rowOrientation = "Horizontal";
         var childExprs:Array<TypedExpr> = [];

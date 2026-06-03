@@ -479,16 +479,23 @@ Inside `Custom`, either form works :
 Both compile to the same C++ shape : a parametric `Callbacks` wrapper
 invoked from `_row.Tapped([i](...) { Callbacks_obj::wui_cb_<N>(i); })`.
 
-> **Closure conversion limits** — the body is walked via the
-> `closureBodyToExpr` pass which handles common shapes (TCall, TField,
-> TConst, TBinop, TUnop, TIf, TBlock, TVar, TArrayDecl, TObjectDecl,
-> TNew, TBreak, TContinue, TThrow, TReturn, TParenthesis, TMeta, TLocal
-> idx-capture). Unsupported : `switch`/`try`/`for`/`while` in the
-> closure body, and **captures of locals other than the index** (the
-> row's `item` and its fields aren't surfaced yet — capturing
-> `item.id` from inside the closure fails to compile). For row data
-> the framework already wires per-field accessors at render time ;
-> exposing them in the closure conversion is a tracked follow-up.
+> **What the closure body can use** — the converter handles the
+> common Haxe AST shapes : `TCall`, `TField`, `TConst`, `TBinop`,
+> `TUnop`, `TIf`, `TBlock`, `TVar`, `TArrayDecl`, `TObjectDecl`,
+> `TNew`, `TBreak`, `TContinue`, `TThrow`, `TReturn`, `TParenthesis`,
+> `TMeta`, `TWhile`, `TFor`, `TSwitch`, `TTry`, `TCast`, `TFunction`
+> (nested lambdas). Both `idx` and field accesses on the row item
+> (`item.fromName`, `item.subject`, …) are surfaced — references to
+> the item's fields are rewritten as calls into the auto-generated
+> `wui.generated.ForEachAccessor` module.
+>
+> Known limits : item field accessors currently emit `String`-typed
+> returns (the rest of the framework reads rows via `Reflect.field`
+> + `Std.string`), so capturing a non-string field like
+> `item.isStarred` fails at re-typing. Capturing locals from the
+> *enclosing* scope (outside the ForEach lambda) is also unsupported
+> — they'd need to be lifted as additional wrapper params, which
+> isn't done yet.
 
 The full background — Immutable triggers, accessor codegen, why the list
 never crosses the bridge — is in [Immutable state](../state/immutable.md).
