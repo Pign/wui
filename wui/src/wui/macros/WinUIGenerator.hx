@@ -1779,16 +1779,30 @@ class WinUIGenerator {
         }
 
         // Assemble the builder body :
-        //   var <itemName>:T = cast wui.state.State.getByName("<state>").value.get(idx);
+        //   var _s:State<ImmutableList<Dynamic>> = cast State.getByName("<state>");
+        //   var <itemName>:T = cast _s.value.get(idx);
         //   var <local> = <init>;
         //   ...
         //   return <closureExpr>;
         var stmts:Array<haxe.macro.Expr> = [];
 
-        // 1. Item materialisation — cast from Dynamic to the
-        // lambda's first-param ComplexType so field accesses retype.
-        var idxIdent = haxe.macro.Context.parse(idxName, pos);
-        var matSrc = 'cast wui.state.State.getByName("' + stateName + '").value.get(' + idxName + ')';
+        // 1. Item materialisation. We need TWO casts, not one :
+        //   - first, cast the Dynamic from `getByName` into a typed
+        //     `State<ImmutableList<Dynamic>>` so the `.value` access
+        //     resolves to the typed `get_value()` property getter ;
+        //   - then, cast the row Dynamic into the lambda's first-
+        //     param ComplexType so subsequent `item.<field>` accesses
+        //     retype as real typed field reads.
+        //
+        // The intermediate state matters : `State.value` on a raw
+        // Dynamic goes through `__Field("value", paccDynamic)`, which
+        // doesn't match the property's `paccAlways` access mode and
+        // returns null → segfault on the next `.get(idx)`. Same shape
+        // as the SET-side bug worked around by `Reflect.callMethod`
+        // in `pushInboxRows` (see [[feedback_hxcpp_dynamic_property_pitfall]]).
+        var matSrc = '{ var _s:wui.state.State<wui.state.ImmutableList<Dynamic>> = '
+            + 'cast wui.state.State.getByName("' + stateName + '"); '
+            + '_s.value.get(' + idxName + '); }';
         var matExpr:haxe.macro.Expr;
         try {
             matExpr = haxe.macro.Context.parse(matSrc, pos);
@@ -1796,7 +1810,7 @@ class WinUIGenerator {
             return null;
         }
         stmts.push({
-            expr: EVars([{ name: itemName, type: itemCT, expr: matExpr }]),
+            expr: EVars([{ name: itemName, type: itemCT, expr: macro cast $matExpr }]),
             pos: pos
         });
 
