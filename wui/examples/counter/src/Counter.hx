@@ -28,11 +28,11 @@ class Counter extends wui.App {
                 .foregroundColor(AccentColor)
                 .padding(),
             new HStack([
-                new Button("-", null, count.dec(1))
+                new Button("-", null, () -> count.value--)
                     .padding(),
-                new Button("Reset", null, count.setTo(0))
+                new Button("Reset", null, () -> count.value = 0)
                     .padding(),
-                new Button("+", null, count.inc(1))
+                new Button("+", null, () -> count.value++)
                     .padding()
             ]).spacing(8),
             new Spacer()

@@ -1,58 +1,23 @@
 package wui.state;
 
 /**
- * Declarative state mutations. Used with Button and other interactive controls
- * to describe what should happen when the user interacts with a control.
+ * Tap / click handler — a plain `() -> Void` closure. Captures
+ * (idx, item fields, locals from the enclosing scope) are handled
+ * natively by hxcpp's runtime closure machinery.
  *
- * The UIBuilder macro translates these into C++/WinRT code that directly
- * calls State<T>::set() — no serialization, no bridge.
+ * For state mutations inside the closure body, just write the
+ * typed setter directly :
  *
- * Usage:
- *   new Button("Add", null, count.inc(1))
- *   new Button("Reset", null, count.setTo(0))
- *   new Button("Toggle", null, isDark.tog())
+ *   .onTap(() -> count.value++)
+ *   .onTap(() -> serverUrl.value = "https://...")
+ *   .onTap(() -> isDark.value = !isDark.value)
+ *
+ * Static handlers compose via plain function refs :
+ *
+ *   .onTap(MyApp.requestLogin)
+ *   .onTap(() -> Session.handleRowTap(idx))   // ForEach row context
+ *
+ * `Sequence`-style chains aren't a thing anymore — just do both
+ * statements in the same closure body.
  */
-enum StateAction {
-    /** Increment a numeric state by amount. */
-    Increment(state:Dynamic, amount:Dynamic);
-
-    /** Decrement a numeric state by amount. */
-    Decrement(state:Dynamic, amount:Dynamic);
-
-    /** Set a state to a specific value. */
-    SetValue(state:Dynamic, value:Dynamic);
-
-    /** Toggle a boolean state. */
-    Toggle(state:Dynamic);
-
-    /** Append a value to an array state. */
-    Append(state:Dynamic, value:Dynamic);
-
-    /** Remove a value from an array state. */
-    Remove(state:Dynamic, value:Dynamic);
-
-    /** Execute a custom callback. The signature is `Dynamic` so the
-        action vocabulary stays open to both the standard `() -> Void`
-        form and parametric variants like `(Int) -> Void` that the
-        macro routes through specialised wrappers (e.g. ForEach row
-        taps where the index is supplied at runtime). The macro
-        validates the actual signature at compile time and emits a
-        clear error if it doesn't match a supported shape. */
-    Custom(callback:Dynamic);
-
-    /** Wrap an action with animation. */
-    Animated(action:StateAction, curve:AnimationCurve);
-
-    /** Execute multiple actions in sequence. */
-    Sequence(actions:Array<StateAction>);
-}
-
-enum AnimationCurve {
-    Default;
-    Linear;
-    EaseIn;
-    EaseOut;
-    EaseInOut;
-    Spring;
-    Bouncy;
-}
+typedef StateAction = () -> Void;

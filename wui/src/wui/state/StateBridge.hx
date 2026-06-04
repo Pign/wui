@@ -2,12 +2,13 @@ package wui.state;
 
 /**
   Read/write `@:state` fields by name from Haxe code (typically a click
-  handler lambda passed to `StateAction.Custom`). All accessors are
-  thin wrappers around `extern "C" clw_state_{set,get}_{string,int,bool,double}`
-  dispatch functions that `UIBuilder` emits into `MainWindow.cpp` —
-  the dispatch looks the field up by wstring name at runtime.
+  handler closure passed to `.onTap(...)` or `Button`'s action arg).
+  All accessors are thin wrappers around
+  `extern "C" clw_state_{set,get}_{string,int,bool,double}` dispatch
+  functions that `UIBuilder` emits into `MainWindow.cpp` — the dispatch
+  looks the field up by wstring name at runtime.
 
-  Usage (inside a `Custom(() -> { ... })` lambda):
+  Usage (inside a `.onTap(() -> { ... })` closure):
     wui.state.StateBridge.setString("loginStatus", "Démarrage…");
     var current = wui.state.StateBridge.getString("loginStatus");
     wui.state.StateBridge.setInt("count", 42);

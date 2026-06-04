@@ -36,10 +36,10 @@ new Button(label:String, ?icon:Dynamic, ?action:StateAction)
 // Simple button
 new Button("Click me")
 
-// Button with a state action
-new Button("Increment", null, count.inc(1))
+// Button with an inline closure
+new Button("Increment", null, () -> count.value++)
 
-// Button with a callback
+// Button with a callback set after construction (modifier-chain style)
 new Button("Submit").onClick(() -> doSomething())
 ```
 
@@ -441,7 +441,7 @@ bindings).
 
 ### Row interaction
 
-Row-tap handlers go through the generic [`.onTap(StateAction)`](#interaction)
+Row-tap handlers go through the generic [`.onTap(closure)`](#interaction)
 modifier on the row View — same modifier you'd use on any other widget.
 The ForEach lambda accepts an optional **second parameter** for the row
 index, which the framework materialises from the C++ `for`-loop counter
@@ -450,61 +450,54 @@ at runtime :
 ```haxe
 new ForEach(todos, (todo:Todo, idx:Int) ->
     new TodoRow(todo.label, todo.meta)
-        .onTap(StateAction.Custom(MyApp.handleRowTap))
-        //                       ^^^^^^^^^^^^^^^^^^^^
-        //                       typed `(Int) -> Void` static
+        .onTap(MyApp.handleRowTap)   // static fn ref, (Int) -> Void
 )
 ```
 
-Inside `Custom`, either form works :
+Two equivalent shapes — both compile to the same C++ wiring :
 
 ```haxe
-// Form A — typed callback. `MyApp.handleRowTap` is `(Int) -> Void`.
-//   The macro detects the signature and routes through a parametric
-//   wrapper in `wui.generated.Callbacks` that takes the row index.
-.onTap(StateAction.Custom(MyApp.handleRowTap))
+// Shape A — static fn ref. The macro wraps it in a builder that
+//   calls `MyApp.handleRowTap(idx)` with the row index.
+.onTap(MyApp.handleRowTap)
 
-// Form B — closure with capture of the lambda's index param. The
-//   typed closure body is converted to an untyped Expr (via
-//   `closureBodyToExpr`) and re-typed inside the generated wrapper
-//   where `idx:Int` is the parameter — references to the ForEach
-//   lambda's index local resolve there.
-.onTap(StateAction.Custom(() -> {
+// Shape B — anonymous closure. Captures `idx`, item fields, and any
+//   locals declared earlier in the row lambda body. hxcpp's runtime
+//   closure machinery handles them — same as a normal Haxe lambda.
+.onTap(() -> {
     var rank = idx + 1;
     StateBridge.setString("status", 'Row #$rank clicked');
     MyApp.handleRowTap(idx);
-}))
+})
 ```
 
-Both compile to the same C++ shape : a parametric `Callbacks` wrapper
-invoked from `_row.Tapped([i](...) { Callbacks_obj::wui_cb_<N>(i); })`.
+Under the hood, both go through the same pipeline — the closure (or the
+wrapped static ref) gets packed by a `(idx:Int) -> () -> Void` builder
+that materialises `item` from the iterated state and re-declares the
+row-lambda locals, then returns the closure. The returned closure is
+stored in a GC-rooted Haxe array (`Callbacks._handlers`) ; the C++
+`Tapped` handler captures only the `Int` index and dispatches via
+`Callbacks.runHandler(_hi)`. This is the same model as React Native's
+callback-ID bridge.
 
-> **What the closure body can use** — the converter handles the
-> common Haxe AST shapes : `TCall`, `TField`, `TConst`, `TBinop`,
-> `TUnop`, `TIf`, `TBlock`, `TVar`, `TArrayDecl`, `TObjectDecl`,
-> `TNew`, `TBreak`, `TContinue`, `TThrow`, `TReturn`, `TParenthesis`,
-> `TMeta`, `TWhile`, `TFor`, `TSwitch`, `TTry`, `TCast`, `TFunction`
-> (nested lambdas). What can be captured :
+> **What the closure body can do** — anything Haxe lets you write,
+> with one caveat (see below). Concretely :
 >
-> * **The row index** (`idx`, the lambda's optional second param) →
->   wrapper's `idx:Int` parameter
-> * **Row item fields** (`item.subject`, `item.isRead`, …) → routed
->   through typed accessors in `wui.generated.ForEachAccessor`.
->   Bodies are emitted for `String`, `Int`, `Float`, `Bool`,
->   `Dynamic` ; field types beyond these fail the conversion and
->   you fall back to a clear error.
-> * **Locals declared in the row lambda body** (`var rank = idx + 1`
->   before the row's `.onTap(...)`) → the initialiser is substituted
->   inline when the closure references the local. Side-effecting
->   initialisers re-evaluate on every tap (the substitution is
->   syntactic, not memoising).
+> * **The row index** (`idx`, the lambda's optional second param) is
+>   in scope, typed `Int`.
+> * **Row item fields** (`item.subject`, `item.isRead`, …) work
+>   through Haxe's normal typed field access — the builder declares
+>   `var item:T = cast …` so the access retypes correctly. No
+>   accessor module needed.
+> * **Locals declared earlier in the row lambda body** (`var rank =
+>   idx + 1` before the row's `.onTap(...)`) are re-declared by the
+>   builder with their original initialisers and captured naturally.
+> * Module statics, other class statics, calls to anything Haxe-side
+>   — all fine.
 >
-> Known limits : direct capture of the row item as a whole
-> (`Custom(() -> sendItem(item))` without a field access) isn't
-> supported — only individual fields. Captures from scopes *outside*
-> the ForEach lambda body (e.g. an outer `body()` local) also
-> aren't surfaced ; module statics, `@:state` via `StateBridge`,
-> and inline lambda locals are the supported routes.
+> **Caveat** — captures from scopes *outside* the row lambda body
+> (e.g. a local declared in the App's `body()`) aren't surfaced. The
+> builder reconstructs the row lambda's scope, not the call site's.
 
 The full background — Immutable triggers, accessor codegen, why the list
 never crosses the bridge — is in [Immutable state](../state/immutable.md).
@@ -514,31 +507,38 @@ never crosses the bridge — is in [Immutable state](../state/immutable.md).
 ## Interaction
 
 The `.onTap(action:StateAction)` modifier is inherited by every View —
-primitives and user components alike. It fires a `StateAction` when the
-user clicks or taps anywhere inside the view's bounds. The action vocabulary
-is identical to `Button`'s :
+primitives and user components alike. `StateAction` is `() -> Void` :
+pass a closure or a static fn ref. The closure body can do whatever
+Haxe lets you write — mutate `@:state` via the typed setter, call
+into module statics, spawn threads.
 
 ```haxe
 new MyComponent(...)
-    .onTap(selectedIdx.setTo(3))                       // method-form action
-    .onTap(StateAction.Toggle(isExpanded))             // enum constructor
-    .onTap(StateAction.Custom(MyApp.handleTap))        // static fn ref
-    .onTap(StateAction.Custom(() -> {                  // anonymous lambda
+    .onTap(() -> selectedIdx.value = 3)            // typed state mutation
+    .onTap(() -> isExpanded.value = !isExpanded.value)  // toggle
+    .onTap(MyApp.handleTap)                        // static fn ref
+    .onTap(() -> {                                 // multi-statement closure
         wui.state.StateBridge.setString("status", "tapped");
         sys.thread.Thread.create(doWork);
-    }))
-    .onTap(StateAction.Sequence([                      // chain
-        StateAction.SetValue(loadingFlag, true),
-        StateAction.Custom(MyApp.fetchDetail),
-    ]));
+    })
+    .onTap(() -> {                                 // "do A then B"
+        loadingFlag.value = true;
+        MyApp.fetchDetail();
+    });
 ```
 
-Under the hood : the modifier analyzer compiles the `StateAction` to a C++
-snippet (same path used for `Button.action`), and `applyModifiers` wraps it
-in a `Tapped` event handler attached to the resulting WinRT control. `Tapped`
-is on `UIElement`, so the modifier composes with any primitive — including
-`Button` (its `Click` and the `Tapped` from `.onTap` both fire on a mouse
-click, the user can pick either route).
+Under the hood : the modifier analyzer compiles the closure to a C++
+snippet (same path used for `Button.action`), and `applyModifiers` wraps
+it in a `Tapped` event handler attached to the resulting WinRT control.
+`Tapped` is on `UIElement`, so the modifier composes with any primitive
+— including `Button` (its `Click` and the `Tapped` from `.onTap` both
+fire on a mouse click, the user can pick either route).
+
+For closures *inside a `ForEach` row template*, see the [row interaction
+section](#row-interaction) above — captures of `idx`, item fields, and
+row-lambda locals all work via the builder path. Closures *outside* a
+ForEach row lift to a static wrapper with no enclosing scope ; reach
+for module statics and `StateBridge` there.
 
 ---
 

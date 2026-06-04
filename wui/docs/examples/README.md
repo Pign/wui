@@ -133,8 +133,8 @@ class Counter extends wui.App {
 
 ```
 User clicks "Increment"
-  -> StateAction.Increment(count, 1) fires
-  -> count.value becomes 1
+  -> the `() -> count.value++` closure fires
+  -> count.value becomes 1, set_value bumps notify_count
   -> count's subscriber lambda fires
   -> Lambda calls textBlock.Text(L"1") in C++
   -> UI shows "1" instantly

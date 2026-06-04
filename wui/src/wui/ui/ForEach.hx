@@ -110,17 +110,19 @@ class ForEach extends View {
         var prevForeachIdx = wui.macros.WinUIGenerator.foreachContextIdxName;
         var prevForeachItemVar = wui.macros.WinUIGenerator.foreachContextItemVar;
         var prevForeachState = wui.macros.WinUIGenerator.foreachContextStateName;
-        var prevForeachLocals = wui.macros.WinUIGenerator.foreachContextLocalInits;
+        var prevForeachLocals = wui.macros.WinUIGenerator.foreachContextLocalDecls;
         wui.macros.WinUIGenerator.foreachContextIdxName = lambdaIdxName;
         wui.macros.WinUIGenerator.foreachContextItemVar = lambdaItemVar;
         wui.macros.WinUIGenerator.foreachContextStateName = stateName;
         // Pre-walk : collect TVar declarations from the row lambda
-        // body (the un-unwrapped form, so TBlock with TVar entries
-        // is fully visible) so a `.onTap(StateAction.Custom(...))`
-        // closure can capture locals declared in the row template.
-        var lambdaLocals = new Map<Int, haxe.macro.Type.TypedExpr>();
-        wui.macros.WinUIGenerator.collectLocalInits(lambdaRawBody, lambdaLocals);
-        wui.macros.WinUIGenerator.foreachContextLocalInits = lambdaLocals;
+        // body (un-unwrapped form, so TBlock with TVar entries is
+        // fully visible) in source order. The row tap builder
+        // re-declares each in turn, so a `.onTap(...)` closure can
+        // reference them naturally — Haxe runtime closures handle
+        // the actual capture.
+        var lambdaLocals:Array<{name:String, init:haxe.macro.Type.TypedExpr}> = [];
+        wui.macros.WinUIGenerator.collectLocalDecls(lambdaRawBody, lambdaLocals);
+        wui.macros.WinUIGenerator.foreachContextLocalDecls = lambdaLocals;
         var walking = true;
         while (walking) {
             walking = false;
@@ -160,7 +162,7 @@ class ForEach extends View {
         wui.macros.WinUIGenerator.foreachContextIdxName = prevForeachIdx;
         wui.macros.WinUIGenerator.foreachContextItemVar = prevForeachItemVar;
         wui.macros.WinUIGenerator.foreachContextStateName = prevForeachState;
-        wui.macros.WinUIGenerator.foreachContextLocalInits = prevForeachLocals;
+        wui.macros.WinUIGenerator.foreachContextLocalDecls = prevForeachLocals;
 
         var rowOrientation = "Horizontal";
         var childExprs:Array<TypedExpr> = [];
@@ -242,10 +244,28 @@ class ForEach extends View {
         ctx.lines.push('        _row.Orientation(winrt_controls::Orientation::$rowOrientation);');
         // Modifiers chainés sur la racine du template lambda (collectés
         // par wuiAnalyze en walkant la TCall chain). Le OnTap est
-        // traité à part parce que son snippet peut référencer `i` (le
-        // loop counter de la boucle row) — le Tapped handler doit donc
-        // capturer `[i]` explicitement. Les autres modifiers (padding,
-        // background, etc.) passent par le chemin standard.
+        // traité à part : son snippet peut prendre deux formes selon
+        // ce que l'utilisateur a passé à `.onTap(...)`.
+        //
+        //   1. Préfixe `BUILDER::` — chemin "runtime closure" (par
+        //      défaut en ForEach context). Le snippet est l'EXPR
+        //      `::wui::generated::Callbacks_obj::wui_cb_<N>_build(i)`
+        //      qui retourne un `() -> Void` Haxe avec ses captures
+        //      (idx, item.fields typés, locals de la row lambda)
+        //      résolues à runtime par hxcpp. On register la closure
+        //      dans le store GC-rooté `Callbacks._handlers` et on
+        //      capture l'index `_hi` (Int) côté Tapped lambda C++ ;
+        //      la dispatch passe par `Callbacks_obj::invoke(_hi)`.
+        //      Aucun objet Haxe n'est capturé directement par le C++ —
+        //      sidesteppe le "GC ne trace pas les captures de lambda
+        //      C++" issue.
+        //
+        //   2. Snippet brut (statement, terminé par `;`) — chemin
+        //      legacy : un zero-arg wrapper static sur Callbacks_obj
+        //      qu'on invoque inline depuis le Tapped handler. Utilisé
+        //      si `buildForEachRowTapBuilder` n'a pas pu produire un
+        //      builder (typiquement : pas de TFunction reconnaissable,
+        //      ou pas de foreachContext disponible).
         var rowTapSnippets:Array<String> = [];
         var rowOtherMods:Array<wui.macros.UIBuilder.ModifierData> = [];
         for (m in rowMods) {
@@ -254,9 +274,17 @@ class ForEach extends View {
         }
         if (rowOtherMods.length > 0) ctx.applyModifiers("_row", "StackPanel", rowOtherMods);
         for (snippet in rowTapSnippets) {
-            ctx.lines.push('        _row.Tapped([i](winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::Input::TappedRoutedEventArgs const&) {');
-            ctx.lines.push('            $snippet');
-            ctx.lines.push('        });');
+            if (StringTools.startsWith(snippet, "BUILDER::")) {
+                var buildCall = snippet.substr("BUILDER::".length);
+                ctx.lines.push('        int _hi = ::wui::generated::Callbacks_obj::regHandler($buildCall);');
+                ctx.lines.push('        _row.Tapped([_hi](winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::Input::TappedRoutedEventArgs const&) {');
+                ctx.lines.push('            ::wui::generated::Callbacks_obj::runHandler(_hi);');
+                ctx.lines.push('        });');
+            } else {
+                ctx.lines.push('        _row.Tapped([i](winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::Input::TappedRoutedEventArgs const&) {');
+                ctx.lines.push('            $snippet');
+                ctx.lines.push('        });');
+            }
         }
 
         for (spec in childSpecs) {

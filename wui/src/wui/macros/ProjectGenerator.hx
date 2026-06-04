@@ -164,7 +164,7 @@ class ProjectGenerator {
       <!-- DISABLE_XAML_GENERATED_MAIN: we ship our own wWinMain.
            HX_*/HXCPP_*: hxcpp framework headers gate platform code on
            these. MainWindow.cpp includes <hxcpp.h> + the generated
-           Callbacks header when StateAction.Custom callbacks are used. -->
+           Callbacks header to dispatch `.onTap` handlers. -->
       <PreprocessorDefinitions>DISABLE_XAML_GENERATED_MAIN;HX_WINDOWS;HXCPP_M64;HXCPP_API_LEVEL=430;HX_SMART_STRINGS;HXCPP_VISIT_ALLOCS;STATIC_LINK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- Match hxcpp static_link CRT (it uses /MT release, /MTd debug).
            Mixing /MT and /MD across the lib boundary causes LNK2038. -->

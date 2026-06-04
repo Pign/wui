@@ -90,33 +90,6 @@ class State<T> {
         value = v;
     }
 
-    // --- Convenience StateAction builders ---
-
-    /** Create an action that increments this state by amount. */
-    public function inc(amount:Dynamic):StateAction {
-        return Increment(this, amount);
-    }
-
-    /** Create an action that decrements this state by amount. */
-    public function dec(amount:Dynamic):StateAction {
-        return Decrement(this, amount);
-    }
-
-    /** Create an action that sets this state to a specific value. */
-    public function setTo(val:T):StateAction {
-        return SetValue(this, val);
-    }
-
-    /** Create an action that toggles this boolean state. */
-    public function tog():StateAction {
-        return Toggle(this);
-    }
-
-    /** Create an action that appends a value to this array state. */
-    public function appendAction(val:Dynamic):StateAction {
-        return Append(this, val);
-    }
-
     // --- Static helpers ---
 
     /** Get a state by name from the global registry. */

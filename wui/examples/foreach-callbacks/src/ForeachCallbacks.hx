@@ -7,30 +7,24 @@ import wui.ui.ForEach;
 import wui.modifiers.ViewModifier.FontStyle;
 import wui.modifiers.ViewModifier.ColorValue;
 import wui.state.ImmutableList;
-import wui.state.StateAction;
 import wui.state.StateBridge;
 
 /**
- * Demonstrates the two row-tap patterns that compose with `ForEach` :
+ * Demonstrates the two row-tap shapes that compose with `ForEach`.
+ * Both are just closures now — `.onTap` accepts `() -> Void` directly :
  *
- *   1. **Typed callback** — `Custom(staticFn)` where `staticFn` is
- *      typed `(Int) -> Void`. The macro detects the signature and
- *      routes through a parametric `wui.generated.Callbacks` wrapper
- *      that receives the row index from the C++ Tapped handler.
+ *   1. **Static fn ref**    `.onTap(MyApp.handleTap)`         — no captures
+ *   2. **Anonymous closure** `.onTap(() -> { … idx … })`     — full captures
  *
- *   2. **Closure** — `Custom(() -> { … idx … })`. The macro converts
- *      the typed body to an untyped Expr via `closureBodyToExpr`,
- *      rewriting references to the ForEach lambda's index local as
- *      bare `idx` identifiers. Haxe re-types the converted body
- *      inside the generated wrapper where `idx:Int` is the param.
+ * Inside a ForEach row, anonymous closures can reach for `idx`,
+ * `item.<field>`, and any locals declared earlier in the row lambda
+ * body. hxcpp's runtime closure machinery handles the captures ; the
+ * macro materialises `item` from the State registry via a typed cast
+ * so field accesses retype correctly.
  *
- * Both produce the same C++ shape : a parametric wrapper invoked
- * from `_row.Tapped([i](...) { Callbacks_obj::wui_cb_<N>(i); });`.
- *
- * The example shows a left column with typed-callback rows and a
- * right column with closure rows. Clicking a row in either updates
- * the `status` line below to indicate which row fired which path —
- * proves that both compile to the same runtime behaviour.
+ * The example shows a left column with static-ref rows and a right
+ * column with closure rows. Clicking a row in either updates the
+ * `status` line below to indicate which path fired.
  */
 typedef Item = { id:String, label:String };
 
@@ -48,9 +42,11 @@ class ForeachCallbacks extends wui.App {
 
     override function appName():String return "ForEach Callbacks";
 
-    // Typed callback target — referenced by name in pattern 1.
-    public static function typedTap(idx:Int):Void {
-        StateBridge.setString("status", "Typed callback fired for row #" + idx);
+    // Static fn target — referenced by name in pattern 1. The macro
+    // wraps it in a closure that calls `staticTap(idx)` so it still
+    // sees the row index even though the source ref has no captures.
+    public static function staticTap(idx:Int):Void {
+        StateBridge.setString("status", "Static fn fired for row #" + idx);
     }
 
     override function body():View {
@@ -66,12 +62,12 @@ class ForeachCallbacks extends wui.App {
             new Spacer(20),
 
             new HStack([
-                // ── Pattern 1 — typed callback ──
+                // ── Pattern 1 — static fn ref ──
                 new VStack([
-                    new Text("Pattern 1 — typed callback")
+                    new Text("Pattern 1 — static fn ref")
                         .font(BodyStrong)
                         .foregroundColor(ColorValue.Rgb(186, 195, 255)),
-                    new Text("Custom(StaticFn) where StaticFn : (Int) -> Void")
+                    new Text(".onTap(MyApp.staticTap) where staticTap : (Int) -> Void")
                         .font(Caption)
                         .foregroundColor(ColorValue.Rgb(140, 145, 157)),
                     new ForEach(items, (item:Item, idx:Int) ->
@@ -81,7 +77,7 @@ class ForeachCallbacks extends wui.App {
                             new Text(item.id),
                         ])
                             .padding(10)
-                            .onTap(StateAction.Custom(ForeachCallbacks.typedTap))
+                            .onTap(ForeachCallbacks.staticTap)
                     ),
                 ]).spacing(8).padding().width(380),
 
@@ -90,36 +86,30 @@ class ForeachCallbacks extends wui.App {
                     new Text("Pattern 2 — closure with capture")
                         .font(BodyStrong)
                         .foregroundColor(ColorValue.Rgb(186, 195, 255)),
-                    new Text("Custom(() -> { … idx … }) — multi-statement OK")
+                    new Text(".onTap(() -> { … idx, item.<field>, locals … })")
                         .font(Caption)
                         .foregroundColor(ColorValue.Rgb(140, 145, 157)),
-                    new ForEach(items, (item:Item, idx:Int) ->
+                    new ForEach(items, (item:Item, idx:Int) -> {
+                        // Body is arbitrary Haxe — multi-statement,
+                        // captures of idx + typed item field accesses +
+                        // locals declared in the row lambda. All handled
+                        // at runtime by hxcpp's closure machinery.
+                        var rank = idx + 1;
                         new HStack([
                             new Text(item.label),
                             new Text(" — "),
                             new Text(item.id),
                         ])
                             .padding(10)
-                            .onTap(StateAction.Custom(() -> {
-                                // Body is arbitrary Haxe — multi-statement,
-                                // multiple captures of idx, expressions,
-                                // calls to different statics. The macro
-                                // converts the typed expression to an
-                                // untyped Expr and re-types it inside the
-                                // wrapper where `idx:Int` is the param.
-                                // Note : capturing the row item itself
-                                // (`item.id`) isn't supported yet — only
-                                // the index `idx` is plumbed through. The
-                                // item field accessor route would mirror
-                                // what `ForEachAccessor` already does at
-                                // render time.
-                                var rank = idx + 1;
+                            .onTap(() -> {
                                 StateBridge.setString(
                                     "status",
-                                    "Closure fired for row #" + rank + " (zero-based " + idx + ")"
+                                    "Closure fired for row #" + rank
+                                        + " (zero-based " + idx + ") — "
+                                        + item.label
                                 );
-                            }))
-                    ),
+                            });
+                    }),
                 ]).spacing(8).padding().width(380),
             ]),
 

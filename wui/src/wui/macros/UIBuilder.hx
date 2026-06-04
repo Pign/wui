@@ -736,12 +736,6 @@ ${emitTitleBarPassthrough(titleBarRootVar, titleBarInteractive)}
         }
     }
 
-    public static function generateStateActionCode(action:Dynamic):String {
-        // Generates C++ code for a StateAction
-        // This will be expanded as the state system matures
-        return "// StateAction: TODO";
-    }
-
     // ---- Utilities ----
 
     public static function escapeWideString(s:String):String {

@@ -49,11 +49,16 @@ new State<T>(initial:T, stateName:String)
 | `set(v:T):Void` | Set a new value and notify subscribers. Alias for `.value = v`. |
 | `subscribe(fn:T -> Void)` | Register a listener called on every value change. |
 | `unsubscribe(fn:T -> Void)` | Remove a previously registered listener. |
-| `inc(amount)` | Returns a `StateAction.Increment` for this state. |
-| `dec(amount)` | Returns a `StateAction.Decrement` for this state. |
-| `setTo(val)` | Returns a `StateAction.SetValue` for this state. |
-| `tog()` | Returns a `StateAction.Toggle` for this state. |
-| `appendAction(val)` | Returns a `StateAction.Append` for this state. |
+
+For mutations in click handlers, just write the typed setter directly inside the closure :
+
+```haxe
+new Button("+",     null, () -> count.value++)
+new Button("Reset", null, () -> count.value = 0)
+new Button("Dark",  null, () -> isDark.value = !isDark.value)
+```
+
+No more `count.inc(1)` shortcuts — closures are the single, uniform vocabulary.
 
 ### Static helpers
 
@@ -95,7 +100,7 @@ The macro:
 
 Supported default expression literals: `Int`, `Float`, `Bool`, `String`. Other expressions fall back to the per-type zero value (`0`, `0.0`, `false`, `L""`).
 
-You then use `count.value`, `count.inc(1)`, etc. in your `body()`.
+You then use `count.value` (read or assign) anywhere `body()` produces — inside a `.onTap(() -> { … })` closure for mutations, or inline (`new Text("Count: " + count)`) for display, where the framework macro resolves the state-bound binding.
 
 ### Type rule
 
@@ -210,8 +215,8 @@ Not yet wired:
   primitives already support it; only the macro's scope propagation
   needs the recursive walk.
 - `.value` rewrite for composite reads inside `effects()` /
-  `StateAction.Custom` lambdas. `settings.fontSize.value` in a lifted
-  lambda currently reads the stale Haxe-side `State<Int>._value`
+  `.onTap(() -> { … })` closures. `settings.fontSize.value` in a lifted
+  closure currently reads the stale Haxe-side `State<Int>._value`
   instead of going through `StateBridge`. Primitive `@:state` reads
   (`searchQuery.value`) still work through the existing rewrite.
 - Composite refs in `Effect.run` deps (`[settings.darkMode]`). Pass the
@@ -254,83 +259,51 @@ the `set_value` Reflect detour on hxcpp — is in
 
 ---
 
-## StateAction
+## StateAction — a closure type
 
-Declarative state mutations. Passed to `Button` and other interactive controls to describe what happens on interaction. The UIBuilder macro translates these directly into C++/WinRT code — no runtime enum dispatch, no per-action object.
-
-```haxe
-new Button("Add",    null, count.inc(1))
-new Button("Reset",  null, count.setTo(0))
-new Button("Toggle", null, isDark.tog())
-```
-
-### All actions
-
-| Action | Description | Example |
-|--------|-------------|---------|
-| `Increment(state, amount)` | Add `amount` to a numeric state. | `count.inc(1)` |
-| `Decrement(state, amount)` | Subtract `amount` from a numeric state. | `count.dec(1)` |
-| `SetValue(state, value)` | Set state to a specific value. | `count.setTo(0)` or `StateAction.SetValue(count, 42)` |
-| `Toggle(state)` | Flip a boolean state. | `isDark.tog()` or `StateAction.Toggle(isDark)` |
-| `Custom(callback)` | Execute an arbitrary Haxe callback — see below. | `Custom(MyApp.startLogin)` |
-| `Sequence(actions)` | Execute multiple actions in order. | `Sequence([loginStatus.setTo("…"), Custom(work)])` |
-| `Append(state, value)` | *(planned)* Append to an array state. | — |
-| `Remove(state, value)` | *(planned)* Remove from an array state. | — |
-| `Animated(action, curve)` | *(planned)* Wrap an action with animation. | — |
-
-> Append, Remove and Animated are declared in the enum but the codegen isn't wired yet. Use `Custom` to emulate them for now.
-
-### `Custom` — calling into Haxe
-
-`Custom` lets a click handler invoke arbitrary Haxe code. The macro auto-generates a wrapper in a synthesized `wui.generated.Callbacks` class and the C++ click handler calls it directly — **no manual `@:expose`, no string-based lookup**.
-
-Two forms:
-
-#### Static function reference
+`StateAction` is just `typedef StateAction = () -> Void`. The third arg of `Button`, the arg of `.onTap(...)`, and similar tap-handler slots all accept a closure (or a static fn ref that coerces to one). There is no enum of variants ; there is no method-form shortcut on `State<T>`. There is one uniform vocabulary :
 
 ```haxe
-class MyApp extends wui.App {
-    public static function startLogin():Void {
-        // do work, set state, spawn threads…
-    }
-
-    override function body():View
-        return new Button("Login", null, StateAction.Custom(MyApp.startLogin));
-}
-```
-
-#### Anonymous lambda
-
-```haxe
-new Button("Login", null, StateAction.Custom(() -> {
+new Button("Login",   null, MyApp.startLogin)              // static fn ref
+new Button("+",       null, () -> count.value++)           // closure
+new Button("Reset",   null, () -> count.value = 0)         // closure
+new Button("Connect", null, () -> {                        // multi-statement
     wui.state.StateBridge.setString("loginStatus", "Loading…");
     sys.thread.Thread.create(() -> doAsyncWork());
-}))
+})
 ```
 
-The lambda body is lifted into a static wrapper in `wui.generated.Callbacks` via `Context.storeTypedExpr`. This is important because **`body()` itself never runs at runtime** — the macro consumes the typed AST at compile time and emits all the WinUI 3 code from it. So the lambda has no enclosing runtime scope to capture from:
+### Static fn refs vs closures
 
-- `this.X` references would point at an instance that's never instantiated → not supported.
-- Locals declared in `body()` don't exist at runtime → not supported.
-- **Module-level statics** and **other class statics** are fine (resolved by name into the static wrapper).
-- **State** is read/written via `wui.state.StateBridge.{get,set}{String,Int,Float,Bool}(name)` — works from the lifted lambda just like from anywhere else.
+| Shape | When | What the macro does |
+|---|---|---|
+| `MyApp.handler`        | The work is a real function elsewhere | Emit a zero-arg wrapper on `wui.generated.Callbacks` that calls the target ; the C++ click handler invokes the wrapper |
+| `() -> { … }` (no captures) | Inline body, references only statics + StateBridge | Lift the body via `Context.storeTypedExpr` into the same Callbacks class. **`body()` never runs at runtime**, so the lambda has no enclosing scope — `this.X` and `body()`-locals aren't reachable. Module statics, other class statics, and StateBridge are fine. |
+| `() -> { … }` (with captures, inside a `ForEach` row) | Closure references the row `idx`, item fields, or row-lambda locals | Generate a `(idx:Int) -> () -> Void` *builder* that materialises `item` (cast from `State.getByName("<state>").value.get(idx)`) and the row-lambda locals, then returns the closure. hxcpp handles the captures at runtime. The closure is stored in a GC-rooted `Callbacks._handlers` array ; the C++ Tapped handler captures only the `Int` index and dispatches via `Callbacks.runHandler(_hi)`. |
 
-This makes lambdas in `Custom` more like *static methods spelled inline* than true closures. For an interim spike where you'd really want a runtime-built closure with capture-by-reference (and writebacks), the lift pattern doesn't help yet — track that as a follow-up if you hit it.
+The third row is what makes runtime closures with captures work — see the [ForEach row taps section in views/README.md](../views/README.md) for the full pattern.
 
-> See [#threading-caveat](#threading-caveat) before passing data into worker threads.
-
-### `Sequence` — chaining actions
-
-`Sequence` runs all its inner actions on click. Useful for "set a status string, then start a worker":
+For state mutations that used to read `count.inc(1)` etc., just write the typed setter directly inside the closure :
 
 ```haxe
-new Button("Connecter", null, StateAction.Sequence([
-    StateAction.SetValue(loginStatus, "Démarrage…"),
-    StateAction.Custom(MyApp.startLogin),
-]))
+() -> count.value++          // increment
+() -> count.value--          // decrement
+() -> count.value = 0        // set
+() -> isDark.value = !isDark.value   // toggle
 ```
 
-Inner actions can be any other `StateAction`, including another `Sequence`.
+`count` is a typed `State<Int>` (after `@:state` macro expansion). The typed setter call goes through `set_value` cleanly — no Dynamic dispatch, no Reflect roundtrip.
+
+For "set A then start B" chains, just do both statements in the same closure :
+
+```haxe
+new Button("Connecter", null, () -> {
+    StateBridge.setString("loginStatus", "Démarrage…");
+    MyApp.startLogin();
+})
+```
+
+> See [#threading-caveat](#threading-caveat) before passing data into worker threads.
 
 ---
 
@@ -387,7 +360,8 @@ It's not required, just predictable.
 | --- | --- |
 | Closure built and called on the same thread, in a normal runtime function | ✅ |
 | Closure passed to `Thread.create` | ✅ (hxcpp GC-tracks captured locals) |
-| Lambda passed to `StateAction.Custom(() -> {...})` inside `body()` | ❌ — `body()` is compile-time only; the lifted lambda has no closure scope |
+| `.onTap(() -> { … })` outside a `ForEach` row | ❌ — `body()` is compile-time only ; the lifted lambda has no closure scope. Reach for module statics + `StateBridge`. |
+| `.onTap(() -> { … })` inside a `ForEach` row | ✅ — `idx`, `item.<field>`, and row-lambda locals capture cleanly. The macro routes through a per-row builder + GC-rooted handler store. |
 
 ---
 
@@ -436,7 +410,7 @@ Use refs from `effects()`. The string form stays available for the rare case whe
 
 ### Reading state inside the effect body
 
-The lambda is **lifted to a static C++ wrapper** — same constraint as `StateAction.Custom`. It has no enclosing runtime scope, so:
+The lambda is **lifted to a static C++ wrapper** — same constraint as a non-ForEach `.onTap(() -> { … })` closure. It has no enclosing runtime scope, so:
 
 - Use `StateBridge.get{String,Int,Float,Bool}("name")` to read the *current* value. The Haxe-side `State<T>.value` is stale; only the C++ `s_<name>` is the source of truth.
 - Static helpers, module-level functions, and other class statics work normally.
@@ -561,9 +535,9 @@ class Counter extends wui.App {
                 .font(TitleLarge)
                 .foregroundColor(AccentColor),
             new HStack([
-                new Button("-", null, count.dec(1)),
-                new Button("Reset", null, count.setTo(0)),
-                new Button("+", null, count.inc(1))
+                new Button("-", null, () -> count.value--),
+                new Button("Reset", null, () -> count.value = 0),
+                new Button("+", null, () -> count.value++)
             ]).spacing(8)
         ]).horizontalAlignment(Center);
     }
@@ -575,7 +549,6 @@ class Counter extends wui.App {
 ```haxe
 import wui.View;
 import wui.ui.*;
-import wui.state.StateAction;
 import wui.state.StateBridge;
 
 class App extends wui.App {
@@ -612,7 +585,7 @@ class App extends wui.App {
             new TextBox("https://…", serverUrl),
             new Text("Code utilisateur : " + userCode),
             new Text(loginStatus),
-            new Button("Se connecter", null, StateAction.Custom(App.startLogin)),
+            new Button("Se connecter", null, App.startLogin),
         ]);
     }
 }

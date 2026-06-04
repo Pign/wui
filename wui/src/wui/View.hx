@@ -160,21 +160,22 @@ class View {
     // --- Interaction Modifiers ---
 
     /**
-     * Tap handler — fires the `StateAction` when the user clicks or
-     * taps anywhere inside the view's bounds. Works uniformly on
-     * primitives and user components ; the macro pipeline emits a
-     * `Tapped` event on the resulting C++ control during `applyModifiers`.
+     * Tap handler — fires the closure when the user clicks or taps
+     * anywhere inside the view's bounds. Works uniformly on primitives
+     * and user components ; the macro pipeline emits a `Tapped` event
+     * on the resulting C++ control during `applyModifiers`.
      *
-     * Same action vocabulary as `Button` :
+     * `StateAction` is `() -> Void` — pass a closure or a static fn ref :
      *
      *     new MyComponent(...)
-     *         .onTap(selectedIdx.setTo(3))
-     *         .onTap(StateAction.Toggle(isExpanded))
-     *         .onTap(StateAction.Custom(MyApp.handleRowTap))
+     *         .onTap(() -> selectedIdx.value = 3)
+     *         .onTap(() -> isExpanded.value = !isExpanded.value)
+     *         .onTap(MyApp.handleRowTap)
      *
-     * For one-off click handlers the `Custom` lambda form is the most
-     * direct — the wui macro lifts the lambda body into a static
-     * wrapper and the emitted Tapped handler calls it.
+     * Inside a `ForEach` row, the closure can capture the lambda's
+     * `idx`, `item.<field>` accesses, and locals declared earlier in
+     * the row lambda body — all handled at runtime by hxcpp closures
+     * (see the row tap builder in the WUI macro).
      */
     public function onTap(action:wui.state.StateAction):View {
         modifierChain.push(OnTap(action));
