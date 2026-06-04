@@ -685,24 +685,17 @@ class WinUIGenerator {
         switch (item.expr) {
             case TConst(TString(s)):
                 return s;
-            case TField(_, fa):
-                var fieldName = switch (fa) {
-                    case FInstance(_, _, cfRef): cfRef.get().name;
-                    case FStatic(_, cfRef): cfRef.get().name;
-                    case FDynamic(s): s;
-                    default: null;
-                };
-                if (fieldName == null) return null;
-                for (sf in UIBuilder.stateFields) {
-                    if (sf.name == fieldName) return fieldName;
-                }
-                return null;
             case TParenthesis(e):
                 return extractDepName(e);
             case TCast(e, _):
                 return extractDepName(e);
             default:
-                return null;
+                // Delegate to the general @:state field resolver — it
+                // recognises both top-level primitives (`searchQuery`
+                // → `"searchQuery"`) and Observable-decomposed composites
+                // (`settings.darkMode` → `"settings.darkMode"`) by
+                // walking the access chain through `buildAccessChain`.
+                return extractStateFieldRef(item);
         }
     }
 
