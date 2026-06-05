@@ -214,13 +214,22 @@ Not yet wired:
   at the field. Recursion will land in a follow-up — the runtime
   primitives already support it; only the macro's scope propagation
   needs the recursive walk.
-- `.value` rewrite for composite reads inside `effects()` /
-  `.onTap(() -> { … })` closures. `settings.fontSize.value` in a lifted
-  closure currently reads the stale Haxe-side `State<Int>._value`
-  instead of going through `StateBridge`. Primitive `@:state` reads
-  (`searchQuery.value`) still work through the existing rewrite.
-- Composite refs in `Effect.run` deps (`[settings.darkMode]`). Pass the
-  composite key as a string for now (`["settings.darkMode"]`).
+
+Recently closed (see [`examples/observable-state/`](../../examples/observable-state/)
+for the exhaustive walkthrough) :
+
+- `.value` rewrite for composite reads. `settings.fontSize.value`
+  inside `effects()` rewrites to `StateBridge.getInt("settings.fontSize")`
+  pre-typing — same machinery as primitive reads, now multi-level.
+- The rewrite extends to 0-arg lambdas inside `body()` / `titleBar()`
+  too — a `.onTap(() -> { ... settings.fontSize.value ... })` closure
+  picks the bridge call instead of the stale `_value`. View bindings
+  themselves (`new Text(settings.nickname)`) stay untouched, so the
+  reactive listener wiring is unchanged.
+- Composite refs in `Effect.run` deps now work as typed refs :
+  `Effect.run(fn, [settings.darkMode])` resolves through the same
+  `extractStateFieldRef` chain used elsewhere. The string form
+  (`["settings.darkMode"]`) still works as an escape hatch.
 
 > **Observable is for field-level reactivity over a known set of fields.**
 > For a reactive *collection* (list, set, map) or for a value type you

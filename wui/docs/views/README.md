@@ -492,12 +492,15 @@ callback-ID bridge.
 > * **Locals declared earlier in the row lambda body** (`var rank =
 >   idx + 1` before the row's `.onTap(...)`) are re-declared by the
 >   builder with their original initialisers and captured naturally.
+> * **Locals from the enclosing `body()` scope** (`var prefix = "row ";`
+>   declared at the top of `body()` and used inside the row tap
+>   closure) are picked up too — the analyzer collects every TVar
+>   it walked through and the builder re-declares the ones the
+>   closure references. Same caveat as inside the row lambda :
+>   initialisers re-evaluate per row build, so prefer pure
+>   expressions over side-effecting ones.
 > * Module statics, other class statics, calls to anything Haxe-side
 >   — all fine.
->
-> **Caveat** — captures from scopes *outside* the row lambda body
-> (e.g. a local declared in the App's `body()`) aren't surfaced. The
-> builder reconstructs the row lambda's scope, not the call site's.
 
 The full background — Immutable triggers, accessor codegen, why the list
 never crosses the bridge — is in [Immutable state](../state/immutable.md).

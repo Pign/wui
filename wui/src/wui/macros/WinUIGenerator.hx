@@ -1810,6 +1810,9 @@ class WinUIGenerator {
         // 2. Re-declare each row-lambda body local. Order matters
         // (later locals may reference earlier ones) — we pushed them
         // in source order during collectLocalDecls.
+        var declaredNames = new Map<String, Bool>();
+        declaredNames.set(itemName, true);
+        declaredNames.set(idxName, true);
         if (locals != null) {
             for (loc in locals) {
                 var ie = closureBodyToExpr(loc.init, idxName);
@@ -1818,6 +1821,31 @@ class WinUIGenerator {
                     expr: EVars([{ name: loc.name, type: null, expr: ie }]),
                     pos: pos
                 });
+                declaredNames.set(loc.name, true);
+            }
+        }
+
+        // 2b. Re-declare each body()-scope local the closure references
+        // but that the row lambda didn't already redeclare. The
+        // analyzer populates `localExprs` as it walks body(), so by the
+        // time we reach a `ForEach`-nested `.onTap` we have access to
+        // every TVar declared earlier in `body()`. We pull only the
+        // ones actually mentioned by the closure to avoid bloating
+        // every builder with the App's whole body() scope.
+        if (localExprs != null) {
+            var referenced = new Map<String, Bool>();
+            collectReferencedLocals(arg, referenced);
+            for (name in referenced.keys()) {
+                if (declaredNames.exists(name)) continue;
+                var init = localExprs.get(name);
+                if (init == null) continue;
+                var ie = closureBodyToExpr(init, idxName);
+                if (ie == null) continue;
+                stmts.push({
+                    expr: EVars([{ name: name, type: null, expr: ie }]),
+                    pos: pos
+                });
+                declaredNames.set(name, true);
             }
         }
 
@@ -2124,6 +2152,19 @@ class WinUIGenerator {
             default:
                 return null;
         }
+    }
+
+    /** Walk a typed expression collecting every `TLocal(v)` name
+        referenced. Used by the row tap builder to figure out which
+        body()-scope locals the closure actually mentions so we can
+        re-declare only those. */
+    public static function collectReferencedLocals(e:haxe.macro.Type.TypedExpr, out:Map<String, Bool>):Void {
+        if (e == null) return;
+        switch (e.expr) {
+            case TLocal(v): out.set(v.name, true);
+            default:
+        }
+        haxe.macro.TypedExprTools.iter(e, function(c) collectReferencedLocals(c, out));
     }
 
     /** Walk a typed expression collecting every `TVar(v, init)` we

@@ -1,0 +1,8 @@
+-cp src
+-cp ../../src
+-lib hxcpp
+--macro wui.macros.WinUIGenerator.register()
+-main ObservableState
+-cpp build/cpp
+-D static_link
+-D HXCPP_M64

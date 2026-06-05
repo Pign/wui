@@ -176,14 +176,49 @@ class StateMacro {
         // `effects()` — see rewriteStateValueAccess. Runs after the
         // field list is finalised so we know exactly which idents are
         // @:state.
-        var allStateNames = primitiveStates.concat(observableStates);
+        //
+        // For Observable composites, enumerate the sub-class's @:state
+        // leaves and append them as synthetic primitives keyed
+        // `<root>.<leaf>` so a `settings.fontSize.value` read inside
+        // an effect (or any lifted closure) rewrites cleanly through
+        // the bridge instead of dereferencing the stale Haxe-side
+        // `_value`.
+        var rewriteStates:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}> = primitiveStates.copy();
+        for (obs in observableStates) {
+            var leaves = enumerateObservableLeaves(obs);
+            for (leaf in leaves) rewriteStates.push(leaf);
+        }
+        var allStateNames = rewriteStates;
         if (allStateNames.length > 0) {
             for (i in 0...newFields.length) {
-                if (newFields[i].name != "effects") continue;
-                switch (newFields[i].kind) {
-                    case FFun(f):
-                        if (f.expr != null) {
-                            f.expr = rewriteStateValueAccess(f.expr, primitiveStates);
+                switch (newFields[i].name) {
+                    case "effects":
+                        // The whole effects() body lives in a single
+                        // static-call context — apply the rewrite to
+                        // its full expression so every `<state>.value`
+                        // read (including the ones inside `Effect.run`
+                        // lambdas) reaches the bridge.
+                        switch (newFields[i].kind) {
+                            case FFun(f) if (f.expr != null):
+                                f.expr = rewriteStateValueAccess(f.expr, rewriteStates);
+                            default:
+                        }
+                    case "body" | "titleBar":
+                        // The view tree itself mustn't be rewritten —
+                        // widget bindings like `new Text(searchQuery)`
+                        // need to stay as state-ref reads for the
+                        // analyzer to wire listeners. But `.onTap(() ->
+                        // { … })`, `Button(label, null, () -> { … })`
+                        // and other 0-arg closures get lifted into
+                        // static `Callbacks_obj` methods that have no
+                        // access to the App instance — there the
+                        // bridge is the only way to read live state.
+                        // Walk for 0-arg lambdas and rewrite their
+                        // bodies only.
+                        switch (newFields[i].kind) {
+                            case FFun(f) if (f.expr != null):
+                                f.expr = rewriteLambdasInBody(f.expr, rewriteStates);
+                            default:
                         }
                     default:
                 }
@@ -191,6 +226,103 @@ class StateMacro {
         }
 
         return newFields;
+    }
+
+    /** Walker that finds every 0-arg `EFunction` reachable from a
+        `body()` / `titleBar()` expression and applies
+        `rewriteStateValueAccess` to its inner expression. Multi-arg
+        functions (ForEach row lambdas, etc.) are descended through
+        but their bodies are not rewritten as a whole — only any
+        nested 0-arg closures inside them get the treatment. */
+    static function rewriteLambdasInBody(e:Expr, states:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}>):Expr {
+        if (e == null) return null;
+        switch (e.expr) {
+            case EFunction(kind, fn) if (fn != null && fn.args != null && fn.args.length == 0 && fn.expr != null):
+                var rewritten = rewriteStateValueAccess(fn.expr, states);
+                return {
+                    expr: EFunction(kind, {
+                        args: fn.args,
+                        ret: fn.ret,
+                        expr: rewritten,
+                        params: fn.params
+                    }),
+                    pos: e.pos
+                };
+            default:
+        }
+        return haxe.macro.ExprTools.map(e, function(c) return rewriteLambdasInBody(c, states));
+    }
+
+    /** Look up an `@:state var <name>:<ObservableSubclass>` field's
+        type via the typer and produce one synthetic primitive entry
+        per `@:state` field declared on the Observable.
+
+        Each entry's `name` is the bridge key (`<name>.<leaf>`), its
+        `type` is the leaf's declared primitive ComplexType (the type
+        parameter of the State<T> wrapping that StateMacro applied
+        when it built the Observable subclass). Used by
+        `rewriteStateValueAccess` to recognise multi-level chains
+        like `settings.darkMode.value` and rewrite them to
+        `StateBridge.getBool("settings.darkMode")`. */
+    static function enumerateObservableLeaves(obs:{name:String, type:ComplexType, initialValue:Expr, pos:Position}):Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}> {
+        var out:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}> = [];
+        var typeName:String = switch (obs.type) {
+            case TPath(p):
+                (p.pack.length > 0 ? p.pack.join(".") + "." : "") + p.name;
+            default: null;
+        };
+        if (typeName == null) return out;
+        var t:haxe.macro.Type;
+        try {
+            t = Context.getType(typeName);
+        } catch (_:Dynamic) {
+            return out;
+        }
+        var fields:Array<haxe.macro.Type.ClassField> = switch (t) {
+            case TInst(cref, _): cref.get().fields.get();
+            default: null;
+        };
+        if (fields == null) return out;
+        for (cf in fields) {
+            // Pick up the original @:state meta — it survives macro
+            // expansion (StateMacro adds the synthetic State<T> wrap
+            // but keeps the source field's meta list).
+            if (!fieldHasStateMeta(cf)) continue;
+            // The field's type is now `State<T>` post-expansion.
+            // Pull out T as the bridge-suffix-determining primitive.
+            var leafType:ComplexType = extractStateInnerType(cf.type);
+            if (leafType == null) continue;
+            out.push({
+                name: obs.name + "." + cf.name,
+                type: leafType,
+                initialValue: macro null,
+                pos: obs.pos
+            });
+        }
+        return out;
+    }
+
+    static function fieldHasStateMeta(cf:haxe.macro.Type.ClassField):Bool {
+        var meta = cf.meta.get();
+        for (m in meta) {
+            if (m.name == ":state" || m.name == "state") return true;
+        }
+        return false;
+    }
+
+    /** Given the post-macro `State<T>` field type, return T as a
+        ComplexType so `bridgeSuffix` can pick the right
+        StateBridge.get/setX flavour. */
+    static function extractStateInnerType(t:haxe.macro.Type):ComplexType {
+        switch (t) {
+            case TInst(cref, params):
+                var c = cref.get();
+                if (c.name == "State" && c.pack.length == 2 && c.pack[0] == "wui" && c.pack[1] == "state" && params.length == 1) {
+                    return haxe.macro.TypeTools.toComplexType(params[0]);
+                }
+            default:
+        }
+        return null;
     }
 
     // ---- Field categorisation -------------------------------------------------
@@ -495,21 +627,52 @@ class StateMacro {
         return ExprTools.map(e, function(c) return rewriteStateValueAccess(c, states));
     }
 
-    /** Return the field name if `e` is `<knownStateIdent>.value`. */
+    /** Return the bridge key if `e` is `<chain>.value` where `<chain>`
+        resolves to a known @:state field (top-level primitive or
+        Observable-decomposed composite).
+
+        Supports :
+          - `searchQuery.value`               → "searchQuery"
+          - `this.searchQuery.value`          → "searchQuery"
+          - `settings.fontSize.value`         → "settings.fontSize"
+          - `this.settings.fontSize.value`    → "settings.fontSize"
+
+        The chain matcher is recursive on the receiver — multi-level
+        Observable composites would extend naturally once the
+        enumerator returns deeper leaves. */
     static function matchStateValueExpr(e:Expr, states:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position}>):String {
         if (e == null) return null;
         switch (e.expr) {
             case EField(receiver, "value"):
-                switch (unwrapExpr(receiver).expr) {
-                    case EConst(CIdent(ident)):
-                        for (sf in states) if (sf.name == ident) return ident;
-                    case EField({expr: EConst(CIdent("this"))}, ident):
-                        for (sf in states) if (sf.name == ident) return ident;
-                    default:
+                var chain = buildIdentChain(receiver);
+                if (chain != null) {
+                    for (sf in states) if (sf.name == chain) return chain;
                 }
             default:
         }
         return null;
+    }
+
+    /** Reconstruct the dotted ident chain rooted at a bare ident or
+        at `this.<ident>`. Returns null for anything else (e.g. a call
+        result, an array access, a non-ident chain root). */
+    static function buildIdentChain(e:Expr):String {
+        if (e == null) return null;
+        switch (unwrapExpr(e).expr) {
+            case EConst(CIdent(ident)):
+                return ident == "this" ? null : ident;
+            case EField(receiver, field):
+                switch (unwrapExpr(receiver).expr) {
+                    case EConst(CIdent("this")):
+                        return field;
+                    default:
+                }
+                var parent = buildIdentChain(receiver);
+                if (parent != null) return parent + "." + field;
+                return null;
+            default:
+                return null;
+        }
     }
 
     static function unwrapExpr(e:Expr):Expr {
@@ -527,11 +690,17 @@ class StateMacro {
         return null;
     }
 
-    /** Map the Haxe field type to the StateBridge get/set suffix. */
+    /** Map the Haxe field type to the StateBridge get/set suffix.
+        Handles both bare type names (`TPath({name: "Bool"})` from
+        user-written `:Bool`) and module-qualified ones
+        (`TPath({name: "StdTypes", sub: "Bool"})` which is what
+        `TypeTools.toComplexType` produces for the standard abstracts
+        when reflecting through `Context.getType`). */
     static function bridgeSuffix(t:ComplexType):String {
         return switch (t) {
             case TPath(p):
-                switch (p.name) {
+                var key = (p.sub != null && p.sub != "") ? p.sub : p.name;
+                switch (key) {
                     case "String": "String";
                     case "Int":    "Int";
                     case "Float":  "Float";
