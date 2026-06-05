@@ -17,6 +17,7 @@ package wui;
 @:cppFileCode('
 extern "C" void clw_window_set_title(const wchar_t* val, int val_len);
 extern "C" void clw_window_set_backdrop(int kind);
+extern "C" void clw_window_open_url(const wchar_t* val, int val_len);
 ')
 @:keep
 class Window {
@@ -39,10 +40,24 @@ class Window {
         };
         untyped __cpp__('clw_window_set_backdrop({0})', kind);
     }
+
+    /** Open a URL in the user's default browser via the Windows shell
+        (`ShellExecuteW("open", …)`). Safe to call from any thread —
+        the call is marshalled to the UI thread by the C++ bridge, so
+        the caller doesn't need its own COM apartment.
+
+        Typical use is the OAuth Device Flow handoff : after the
+        verification URI comes back from `/oidc/device_authorization`,
+        the app pops the user's browser straight to the consent page
+        instead of asking them to copy the URL by hand. */
+    public static function openUrl(value:String):Void {
+        untyped __cpp__('clw_window_open_url(reinterpret_cast<const wchar_t*>(({0}).wc_str()), ({0}).length)', value);
+    }
 }
 #else
 class Window {
     public static function setTitle(value:String):Void throw "wui.Window: cpp target only";
     public static function setBackdrop(value:Backdrop):Void throw "wui.Window: cpp target only";
+    public static function openUrl(value:String):Void throw "wui.Window: cpp target only";
 }
 #end

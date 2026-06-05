@@ -187,6 +187,7 @@ private:
 #include "MainWindow.h"
 #include <cstdio>
 #include <string>
+#include <shellapi.h>
 #include <winrt/Microsoft.UI.Composition.SystemBackdrops.h>
 
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
@@ -231,6 +232,17 @@ extern "C" void clw_window_set_backdrop(int kind) {
                 wui::runtime::window.SystemBackdrop(winrt_media::DesktopAcrylicBackdrop());
                 break;
         }
+    });
+}
+
+// Open a URL in the user\'s default browser. Marshalled to the UI
+// thread so the calling thread (typically an OIDC worker) doesn\'t
+// need its own COM apartment. ShellExecuteW returns immediately ; the
+// browser launch happens asynchronously through the shell.
+extern "C" void clw_window_open_url(const wchar_t* val, int val_len) {
+    std::wstring url(val, val_len);
+    wui::runtime::runOnUIThread([url]() {
+        ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     });
 }
 
