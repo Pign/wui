@@ -50,14 +50,29 @@ class Build {
             Sys.exit(1);
         }
 
-        var haxeResult = runCommand(cwd, "haxe", ["build.hxml"], verbose);
+        // Three defines make hxcpp produce something a WinUI project can link.
+        // Each was found by a link error, in this order:
+        //
+        //  - `static_link`: emit `__lib__` instead of `__main__`, so there is no
+        //    second `main` and `__hxcpp_lib_main()` exists to boot from. hxcpp
+        //    then runs `lib.exe` itself and writes `lib<App>.lib`.
+        //  - the architecture: hxcpp still defaults to 32-bit on Windows while
+        //    the project builds for `arch`. The mismatch surfaces as an
+        //    *unresolved* `wui_bridge_init`, not as an architecture error, since
+        //    x86 decorates `extern "C"` symbols with a leading underscore.
+        //  - `ABI=-MD`: hxcpp defaults to the static C runtime, WinUI uses the
+        //    dynamic one, and the linker refuses to mix them (LNK2038).
+        var archDefine = (arch == "x86") ? "HXCPP_M32" : "HXCPP_M64";
+        var haxeResult = runCommand(cwd, "haxe", [
+            "build.hxml", "-D", "static_link", "-D", archDefine, "-D", "ABI=-MD"
+        ], verbose);
         if (haxeResult != 0) {
             Sys.println("Error: Haxe compilation failed.");
             Sys.exit(1);
         }
 
-        // Step 1b: pack the Haxe runtime into a static library
-        packHaxeLibrary(cwd, wuiConfig.appName, verbose);
+        // Step 1b: confirm hxcpp produced the library the project links against
+        checkHaxeLibrary(cwd, wuiConfig.appName);
 
         // Step 2: NuGet restore
         Sys.println("[2/3] Restoring NuGet packages...");
@@ -98,14 +113,23 @@ class Build {
     }
 
     /**
-     * Find MSBuild.exe using vswhere, then fallback to PATH.
-     */
+        Find an MSBuild.exe that can actually build this project, then fall back
+        to PATH.
+
+        **Newest is not the same as capable.** A WinUI 3 project needs the Appx
+        MSBuild tasks, which ship with the IDE workloads but *not* with Build
+        Tools. Picking the latest install can therefore land on one that fails
+        mid-build with MSB4062 -- and because the exe is linked before the
+        packaging targets run, that failure looks survivable while it has in fact
+        skipped copying the Windows App SDK runtime next to the app, which then
+        dies at startup. Prefer an install that has the tasks.
+    **/
     static function findMSBuild():String {
         // Try vswhere first (standard location)
         var vswhere = "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
         if (FileSystem.exists(vswhere)) {
             var process = new sys.io.Process(vswhere, [
-                "-latest", "-products", "*",
+                "-products", "*", "-sort",
                 "-requires", "Microsoft.Component.MSBuild",
                 "-find", "MSBuild\\**\\Bin\\MSBuild.exe"
             ]);
@@ -113,12 +137,21 @@ class Build {
             var exitCode = process.exitCode();
             process.close();
             if (exitCode == 0 && output.length > 0) {
-                // Take the first line (latest version)
-                var firstLine = output.split("\n")[0];
-                firstLine = StringTools.trim(firstLine);
-                if (FileSystem.exists(firstLine)) {
-                    Sys.println('  Found MSBuild: $firstLine');
-                    return firstLine;
+                var candidates = [];
+                for (line in output.split("\n")) {
+                    var p = StringTools.trim(line);
+                    if (p.length > 0 && FileSystem.exists(p)) candidates.push(p);
+                }
+                for (p in candidates) {
+                    if (hasAppxTasks(p)) {
+                        Sys.println('  Found MSBuild: $p');
+                        return p;
+                    }
+                }
+                if (candidates.length > 0) {
+                    Sys.println('  Found MSBuild: ${candidates[0]}');
+                    Sys.println("  Warning: no Appx MSBuild tasks in this install; a WinUI build may fail with MSB4062.");
+                    return candidates[0];
                 }
             }
         }
@@ -140,6 +173,23 @@ class Build {
         // Fallback to PATH
         Sys.println("  MSBuild: using PATH (run from Developer Command Prompt if this fails)");
         return "msbuild";
+    }
+
+    /**
+        Does this MSBuild ship the Appx packaging tasks a WinUI project needs?
+
+        They live beside the binary, under `MSBuild\Microsoft\VisualStudio\v17.0`,
+        so the answer is a file test rather than a guess about which edition or
+        workload is installed.
+    **/
+    static function hasAppxTasks(msbuildExe:String):Bool {
+        var dir = Path.directory(msbuildExe); // ...\MSBuild\Current\Bin
+        var msbuildRoot = Path.directory(Path.directory(dir)); // ...\MSBuild
+        var task = Path.join([
+            msbuildRoot, "Microsoft", "VisualStudio", "v17.0",
+            "AppxPackage", "Microsoft.Build.AppxPackage.dll"
+        ]);
+        return FileSystem.exists(task);
     }
 
     /**
@@ -184,57 +234,30 @@ class Build {
     }
 
     /**
-        Pack the objects hxcpp produced into `build/cpp/lib<App>.lib`, which the
-        generated project links.
+        Confirm hxcpp produced `build/cpp/lib<App>.lib`, which the generated
+        project links against.
 
-        hxcpp compiles with MSVC on Windows, so its objects are ordinary `.obj`
-        files and the librarian can archive them as they are.
-
-        **`__main__` is excluded on purpose.** hxcpp emits a translation unit
-        whose `main` would clash with the one WinUI provides -- `sui` makes the
-        same exclusion against Swift's entry point, for the same reason.
+        **wui does not run the librarian itself.** Building with `-D static_link`
+        makes hxcpp emit `__lib__` in place of `__main__` and archive its own
+        objects with `lib.exe`, which gets the architecture, the C runtime and
+        the object set right by construction. An earlier version packed the
+        objects by hand and got all three wrong in turn.
 
         A missing library is not fatal here: the link will say so, with a better
         message than anything this step could invent.
     **/
-    static function packHaxeLibrary(cwd:String, appName:String, verbose:Bool):Void {
+    static function checkHaxeLibrary(cwd:String, appName:String):Void {
         if (Sys.systemName() != "Windows") {
-            Sys.println("[1b/3] Skipping the Haxe library: needs the MSVC librarian (Windows only).");
-            return;
-        }
-
-        var objDir = Path.join([cwd, "build", "cpp", "obj"]);
-        if (!FileSystem.exists(objDir)) {
-            Sys.println("[1b/3] No hxcpp objects found; skipping.");
-            return;
-        }
-
-        var objs:Array<String> = [];
-        collectObjects(objDir, objs);
-        if (objs.length == 0) {
-            Sys.println("[1b/3] No .obj files found; skipping.");
+            Sys.println("[1b/3] Skipping the Haxe library: needs MSVC (Windows only).");
             return;
         }
 
         var libPath = Path.join([cwd, "build", "cpp", "lib" + appName + ".lib"]);
-        Sys.println("[1b/3] Packing " + objs.length + " Haxe objects into lib" + appName + ".lib...");
-
-        var args = ["/NOLOGO", "/OUT:" + libPath];
-        for (o in objs) args.push(o);
-        if (runCommand(cwd, "lib", args, verbose) != 0) {
-            Sys.println("Warning: the librarian failed; the link step will report the missing library.");
-        }
-    }
-
-    /** Every `.obj` under `dir`, except hxcpp's `__main__`. **/
-    static function collectObjects(dir:String, into:Array<String>):Void {
-        for (entry in FileSystem.readDirectory(dir)) {
-            var full = Path.join([dir, entry]);
-            if (FileSystem.isDirectory(full)) {
-                collectObjects(full, into);
-            } else if (StringTools.endsWith(entry, ".obj") && entry.indexOf("__main__") == -1) {
-                into.push(full);
-            }
+        if (FileSystem.exists(libPath)) {
+            var mb = Math.round(FileSystem.stat(libPath).size / 1024 / 1024 * 10) / 10;
+            Sys.println('[1b/3] Haxe library ready: lib${appName}.lib (${mb} MB).');
+        } else {
+            Sys.println('[1b/3] Warning: lib${appName}.lib not found; the link step will report it.');
         }
     }
 }
