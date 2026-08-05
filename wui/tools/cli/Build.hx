@@ -56,6 +56,9 @@ class Build {
             Sys.exit(1);
         }
 
+        // Step 1b: pack the Haxe runtime into a static library
+        packHaxeLibrary(cwd, wuiConfig.appName, verbose);
+
         // Step 2: NuGet restore
         Sys.println("[2/3] Restoring NuGet packages...");
         var winuiDir = Path.join([cwd, "build", "winui"]);
@@ -178,5 +181,60 @@ class Build {
         var result = Sys.command(cmd, args);
         Sys.setCwd(oldCwd);
         return result;
+    }
+
+    /**
+        Pack the objects hxcpp produced into `build/cpp/lib<App>.lib`, which the
+        generated project links.
+
+        hxcpp compiles with MSVC on Windows, so its objects are ordinary `.obj`
+        files and the librarian can archive them as they are.
+
+        **`__main__` is excluded on purpose.** hxcpp emits a translation unit
+        whose `main` would clash with the one WinUI provides -- `sui` makes the
+        same exclusion against Swift's entry point, for the same reason.
+
+        A missing library is not fatal here: the link will say so, with a better
+        message than anything this step could invent.
+    **/
+    static function packHaxeLibrary(cwd:String, appName:String, verbose:Bool):Void {
+        if (Sys.systemName() != "Windows") {
+            Sys.println("[1b/3] Skipping the Haxe library: needs the MSVC librarian (Windows only).");
+            return;
+        }
+
+        var objDir = Path.join([cwd, "build", "cpp", "obj"]);
+        if (!FileSystem.exists(objDir)) {
+            Sys.println("[1b/3] No hxcpp objects found; skipping.");
+            return;
+        }
+
+        var objs:Array<String> = [];
+        collectObjects(objDir, objs);
+        if (objs.length == 0) {
+            Sys.println("[1b/3] No .obj files found; skipping.");
+            return;
+        }
+
+        var libPath = Path.join([cwd, "build", "cpp", "lib" + appName + ".lib"]);
+        Sys.println("[1b/3] Packing " + objs.length + " Haxe objects into lib" + appName + ".lib...");
+
+        var args = ["/NOLOGO", "/OUT:" + libPath];
+        for (o in objs) args.push(o);
+        if (runCommand(cwd, "lib", args, verbose) != 0) {
+            Sys.println("Warning: the librarian failed; the link step will report the missing library.");
+        }
+    }
+
+    /** Every `.obj` under `dir`, except hxcpp's `__main__`. **/
+    static function collectObjects(dir:String, into:Array<String>):Void {
+        for (entry in FileSystem.readDirectory(dir)) {
+            var full = Path.join([dir, entry]);
+            if (FileSystem.isDirectory(full)) {
+                collectObjects(full, into);
+            } else if (StringTools.endsWith(entry, ".obj") && entry.indexOf("__main__") == -1) {
+                into.push(full);
+            }
+        }
     }
 }

@@ -38,6 +38,15 @@ class WinUIGenerator {
         if (registered) return;
         registered = true;
 
+        // Force the Haxe/WinUI bridge into the build.
+        //
+        // Nothing in an app references wui.bridge.HaxeBridge, so without this the
+        // module is never loaded, hxcpp never emits it, and `wui_bridge_init` --
+        // which the generated App.cpp declares and calls -- does not exist. The
+        // link would fail on Windows with an unresolved external, long after the
+        // point where the mistake was made. `sui` forces its bridge the same way.
+        Context.getModule("wui.bridge.HaxeBridge");
+
         // Collect types after typing phase
         Context.onAfterTyping(function(types:Array<haxe.macro.Type.ModuleType>) {
             for (mt in types) {

@@ -111,7 +111,11 @@ class ProjectGenerator {
       <SubSystem>Windows</SubSystem>
       <AdditionalDependencies>WindowsApp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <DelayLoadDLLs>Microsoft.WindowsAppRuntime.Bootstrap.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
-      <!-- TODO: Add $cppDir\\lib${appName}.lib when linking hxcpp -->
+      <!-- hxcpp: the Haxe runtime, packed from the MSVC objects hxcpp emits,
+           by the librarian step (__main__ excluded, its main would clash with
+           the one WinUI provides). Absent until that step runs on Windows. -->
+      <AdditionalDependencies>$cppDir\\lib${appName}.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$cppDir;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
 

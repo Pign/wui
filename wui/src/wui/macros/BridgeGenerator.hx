@@ -69,8 +69,17 @@ private:
 
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 
+// Starts the Haxe runtime. Defined in the hxcpp static library; see
+// wui.bridge.HaxeBridge. WinUI owns the entry point, so Haxe cannot own main --
+// it is booted here instead, before the window exists, the same way Qt boots it
+// in qui and Swift in sui.
+extern "C" void wui_bridge_init();
+
 void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
 {
+    // Boot Haxe first: everything built below may call into it.
+    wui_bridge_init();
+
     // Load WinUI control styles (enables TextBox, Slider, ToggleSwitch, etc.)
     Resources().MergedDictionaries().Append(
         winrt::Microsoft::UI::Xaml::Controls::XamlControlsResources());

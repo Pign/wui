@@ -4,6 +4,21 @@ wui uses a reactive state system. You declare state variables with `@:state`, an
 
 All state types live in `wui.state.*`.
 
+> **What backs it, and an important caveat.**
+> `State<T>` extends [`rui.state.State`](https://lapavoiserie.github.io/rui/#/state), the
+> reactive core shared with the other La Pavoiserie backends (`sui`, `aui`, `cui`, `qui`), so
+> the API matches across the family: `get`/`value`, `set`, `peek`, `applyExternal`, `name`.
+> The subscriber list is registered as its platform sink, so `subscribe` behaves exactly as
+> before.
+>
+> **In a built app, this class does not run.** wui is currently a *transpiler*:
+> `WinUIGenerator` reads the typed AST at compile time and emits C++ statics
+> (`s_<name>`, `s_<name>_listeners`, `notify_<name>()`), and the generated Visual Studio
+> project links no hxcpp. So `wui.state.State` is the surface you write against and the model
+> the macro reads — the reactive core is not present at runtime the way it is on the other
+> backends. Practical consequence: only the action forms the generator understands are
+> emitted; arbitrary Haxe closures are not.
+
 ---
 
 ## State\<T\>
