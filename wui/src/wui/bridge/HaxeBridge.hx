@@ -69,6 +69,23 @@ extern "C" void wui_bridge_init() {
 extern "C" bool wui_bridge_ready() {
     return s_wui_haxe_started;
 }
+
+// Build the Haxe view tree once and collect its closures into the registry.
+//
+// The class name is passed as a string because the generator writes App.cpp and
+// already knows it -- which saves defining a Haxe type from the macro just to
+// carry one identifier.
+extern "C" int wui_bridge_install(const char* appClass) {
+    if (!s_wui_haxe_started) return 0;
+    return ::wui::bridge::HaxeBridge_obj::install(::String(appClass));
+}
+
+// Run the Haxe closure registered under `id`. Called from a Click handler, on
+// the UI thread.
+extern "C" void wui_bridge_invoke(int id) {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::Callbacks_obj::invoke(id);
+}
 ')
 #end
 @:keep
@@ -82,6 +99,63 @@ class HaxeBridge {
 	**/
 	public static function hello():Void {
 		trace("[wui] Haxe runtime started");
+	}
+
+	/**
+		Build the app's view tree in Haxe and register the closures it carries.
+
+		The generated C++ builds the *controls*; this builds the same tree on the
+		Haxe side purely to reach the closures, which exist nowhere else. `body()`
+		is compiled like any other method even though the generated app never
+		calls it — the macro reads it at compile time, and here we run it.
+
+		Returns how many closures were found, so the caller can tell an app with
+		no Haxe actions from a walk that went wrong.
+	**/
+	public static function install(appClass:String):Int {
+		Callbacks.reset();
+
+		var cls = Type.resolveClass(appClass);
+		if (cls == null) {
+			trace('[wui] install: class $appClass not found');
+			return 0;
+		}
+
+		var app:Dynamic = Type.createInstance(cls, []);
+		if (app == null) {
+			trace('[wui] install: could not instantiate $appClass');
+			return 0;
+		}
+
+		var root:View = app.body();
+		if (root == null) {
+			trace('[wui] install: $appClass.body() returned null');
+			return 0;
+		}
+
+		collect(root);
+		return Callbacks.count();
+	}
+
+	/**
+		Depth-first over `children`, registering each button that carries a Haxe
+		closure.
+
+		**The order is the contract.** The generator numbers the same tree with
+		the same walk, so anything that changes this traversal changes which
+		closure a click runs — see `Callbacks`.
+	**/
+	static function collect(view:View):Void {
+		if (view == null) return;
+
+		if (view.viewType == "Button") {
+			var cb = view.properties.get("onClick");
+			if (Reflect.isFunction(cb)) {
+				Callbacks.register(cb);
+			}
+		}
+
+		for (child in view.children) collect(child);
 	}
 
 	/** Is the native side up? False when the library was not linked. **/

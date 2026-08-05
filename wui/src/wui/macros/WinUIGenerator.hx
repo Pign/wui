@@ -97,19 +97,55 @@ class WinUIGenerator {
         // Build the view tree from body()
         var viewTree = buildViewTree(appType);
 
+        // Number the Haxe closures. Must mirror HaxeBridge.collect() exactly:
+        // depth-first over children, counting only buttons that carry one.
+        var callbackCount = assignCallbackIds(viewTree, 0);
+
+        // The class the runtime instantiates to reach those closures.
+        var appClassPath = switch (appType) {
+            case TInst(ref, _):
+                var c = ref.get();
+                c.pack.length > 0 ? c.pack.join(".") + "." + c.name : c.name;
+            case _: appName;
+        };
+
         // Generate all files
         Sys.println('[wui] Generating C++/WinRT project for "$appName"...');
 
         ProjectGenerator.generate(appName, winuiDir);
         Sys.println("[wui]   Generated .vcxproj, packages.config, pch.h");
 
-        BridgeGenerator.generate(appName, winuiDir, windowWidth, windowHeight);
+        BridgeGenerator.generate(appName, winuiDir, windowWidth, windowHeight, appClassPath, callbackCount);
         Sys.println("[wui]   Generated App.h, App.cpp, WuiRuntime.h");
 
         UIBuilder.generateMainWindow(viewTree, winuiDir);
         Sys.println("[wui]   Generated MainWindow.h, MainWindow.cpp");
 
         Sys.println('[wui] C++/WinRT project generated at: $winuiDir');
+    }
+
+    /**
+     * Give every closure-bearing button its id, depth-first, and return how many
+     * were numbered.
+     *
+     * This walk is one half of a contract; `wui.bridge.HaxeBridge.collect()` is
+     * the other. They must visit the same buttons in the same order, or a click
+     * runs the wrong closure -- quietly, since both sides are individually
+     * consistent. Changing one without the other is the way to break W2.
+     */
+    static function assignCallbackIds(node:ViewNode, next:Int):Int {
+        if (node == null) return next;
+
+        if (node.viewType == "Button" && node.properties.exists("hasHaxeCallback")) {
+            node.properties.set("haxeCallbackId", next);
+            next++;
+        }
+
+        for (child in node.children) {
+            next = assignCallbackIds(child, next);
+        }
+
+        return next;
     }
 
     /**
@@ -469,6 +505,15 @@ class WinUIGenerator {
                 };
 
                 var baseNode = analyzeBodyExpr(obj);
+
+                // `.onClick(fn)` is not a modifier: it marks the button as
+                // carrying a Haxe closure. The id is assigned later, by walking
+                // the finished tree -- numbering here would follow the order the
+                // typed AST is visited, which for a chained call is inner-first
+                // and does not match the depth-first walk the runtime does.
+                if (fieldName == "onClick" && args.length > 0) {
+                    baseNode.properties.set("hasHaxeCallback", true);
+                }
 
                 var modifier = extractModifier(fieldName, args);
                 if (modifier != null) {

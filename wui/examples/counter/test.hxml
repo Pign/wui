@@ -1,0 +1,10 @@
+# Checks that the generated ids and the runtime walk name the same buttons.
+# No --macro here: this compiles the app's classes to run them, it does not
+# regenerate the project. Run `haxe build.hxml` first -- the test reads the
+# MainWindow.cpp that build produced.
+-cp src
+-cp test
+-cp ../../src
+-lib rui
+-main CallbackOrder
+-cpp build/test

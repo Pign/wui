@@ -28,6 +28,17 @@ class Build {
             }
         }
 
+        // The generator hardcodes x64 in the .vcxproj -- both ProjectConfiguration
+        // entries and both Configuration property groups. Anything else would
+        // build Haxe objects for one architecture and hand MSBuild a project that
+        // cannot describe it, so say so here rather than at the link.
+        if (arch != "x64") {
+            Sys.println('Error: only x64 is supported for now (asked for $arch).');
+            Sys.println("  The generated project declares x64 configurations only;");
+            Sys.println("  teaching it other architectures is its own piece of work.");
+            Sys.exit(1);
+        }
+
         // Read wui.json
         var wuiJsonPath = Path.join([cwd, "wui.json"]);
         if (!FileSystem.exists(wuiJsonPath)) {
@@ -62,7 +73,11 @@ class Build {
         //    x86 decorates `extern "C"` symbols with a leading underscore.
         //  - `ABI=-MD`: hxcpp defaults to the static C runtime, WinUI uses the
         //    dynamic one, and the linker refuses to mix them (LNK2038).
-        var archDefine = (arch == "x86") ? "HXCPP_M32" : "HXCPP_M64";
+        var archDefine = switch (arch) {
+            case "x86": "HXCPP_M32";
+            case "arm64" | "ARM64": "HXCPP_ARM64";
+            case _: "HXCPP_M64";
+        };
         var haxeResult = runCommand(cwd, "haxe", [
             "build.hxml", "-D", "static_link", "-D", archDefine, "-D", "ABI=-MD"
         ], verbose);

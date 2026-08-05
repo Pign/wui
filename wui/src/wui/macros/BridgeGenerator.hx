@@ -14,13 +14,13 @@ import haxe.io.Path;
  */
 class BridgeGenerator {
     #if macro
-    public static function generate(appName:String, outputDir:String, windowWidth:Int, windowHeight:Int):Void {
+    public static function generate(appName:String, outputDir:String, windowWidth:Int, windowHeight:Int, appClassPath:String, callbackCount:Int):Void {
         if (!FileSystem.exists(outputDir)) {
             FileSystem.createDirectory(outputDir);
         }
 
         generateAppHeader(appName, outputDir);
-        generateAppSource(appName, outputDir, windowWidth, windowHeight);
+        generateAppSource(appName, outputDir, windowWidth, windowHeight, appClassPath, callbackCount);
         generateRuntime(outputDir);
     }
 
@@ -62,7 +62,7 @@ private:
         ProjectGenerator.writeIfChanged(Path.join([outputDir, "App.h"]), content);
     }
 
-    static function generateAppSource(appName:String, outputDir:String, windowWidth:Int, windowHeight:Int):Void {
+    static function generateAppSource(appName:String, outputDir:String, windowWidth:Int, windowHeight:Int, appClassPath:String, callbackCount:Int):Void {
         var content = '#include "pch.h"
 #include "App.h"
 #include "MainWindow.h"
@@ -74,11 +74,25 @@ namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 // it is booted here instead, before the window exists, the same way Qt boots it
 // in qui and Swift in sui.
 extern "C" void wui_bridge_init();
+extern "C" int wui_bridge_install(const char* appClass);
 
 void App::OnLaunched(winrt_xaml::LaunchActivatedEventArgs const&)
 {
     // Boot Haxe first: everything built below may call into it.
     wui_bridge_init();
+
+    // Then let Haxe build its own view tree once, purely to collect the closures
+    // its buttons carry. The controls below are still built by this file; what
+    // this call produces is the id -> closure table the Click handlers use.
+    //
+    // The count is compared because a silent zero is the failure that matters:
+    // the app would look correct and every Haxe button would do nothing.
+    {
+        int installed = wui_bridge_install("$appClassPath");
+        if (installed != $callbackCount) {
+            OutputDebugStringA("[wui] callback count mismatch, generated vs registered\\n");
+        }
+    }
 
     // Load WinUI control styles (enables TextBox, Slider, ToggleSwitch, etc.)
     Resources().MergedDictionaries().Append(

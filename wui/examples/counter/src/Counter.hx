@@ -35,7 +35,37 @@ class Counter extends wui.App {
                 new Button("+", null, count.inc(1))
                     .padding()
             ]).spacing(8),
+            // Trois closures Haxe, après trois boutons StateAction : si la
+            // numérotation de la macro et celle de l'exécution divergeaient, un
+            // clic exécuterait la *mauvaise* closure plutôt que rien du tout —
+            // ce que trois libellés distincts rendent visible immédiatement.
+            new HStack([
+                new Button("Haxe A").onClick(() -> report("A")).padding(),
+                new Button("Haxe B").onClick(() -> report("B")).padding(),
+                new Button("Haxe C").onClick(() -> report("C")).padding()
+            ]).spacing(8),
             new Spacer()
         ]).horizontalAlignment(Center);
+    }
+
+    /**
+        Du Haxe arbitraire, hors du vocabulaire du transpileur.
+
+        Une boucle, une concaténation et un compteur statique : rien ici ne
+        pourrait être traduit en `inc`/`dec`/`setTo`/`tog`. C'est précisément
+        l'intérêt — si cette ligne s'affiche au clic, le plafond d'expressivité
+        est levé.
+    **/
+    static var clicks:Int = 0;
+
+    /** Le dernier bouton actionné. Lu par le test d'ordre des identifiants. **/
+    public static var last:String = null;
+
+    static function report(which:String):Void {
+        clicks++;
+        last = which;
+        var marks = "";
+        for (i in 0...clicks) marks += "*";
+        trace('[wui] bouton $which, clic n°$clicks $marks');
     }
 }

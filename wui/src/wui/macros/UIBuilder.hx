@@ -107,6 +107,11 @@ namespace MainWindow {
 #include "MainWindow.h"
 #include <vector>
 
+// Implemented in the hxcpp library (wui.bridge.HaxeBridge). Declared rather
+// than included: this file must keep compiling when no Haxe closure is used,
+// and hxcpp headers have no business in the UI translation unit.
+extern "C" void wui_bridge_invoke(int id);
+
 namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 namespace winrt_media = winrt::Microsoft::UI::Xaml::Media;
@@ -257,6 +262,16 @@ $subscriptionLines
             lines.push('$varName.Content(winrt::box_value(L"$escaped"));');
         }
 
+        // A Haxe closure: call into the registry by id rather than translating
+        // anything. This is the path that lifts the ceiling -- the closure can
+        // hold arbitrary Haxe, because nothing here needs to understand it.
+        var callbackId = node.properties.get("haxeCallbackId");
+        if (callbackId != null) {
+            lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
+            lines.push('    wui_bridge_invoke($callbackId);');
+            lines.push('});');
+        }
+
         // Click handler — from onClick property, StateAction, or auto-detected state action
         var onClick = node.properties.get("onClick");
         if (onClick != null) {
@@ -274,8 +289,10 @@ $subscriptionLines
             lines.push('});');
         }
 
-        // Auto-wire: if there are state fields and no explicit handler, detect by label
-        if (onClick == null && action == null && stateFields.length > 0) {
+        // Auto-wire: if there are state fields and no explicit handler, detect by label.
+        // A Haxe closure counts as an explicit handler -- otherwise a button named
+        // "Reset" would fire both its closure and this guess.
+        if (onClick == null && action == null && callbackId == null && stateFields.length > 0) {
             var sf = stateFields[0]; // use first state field
             var labelStr = label != null ? Std.string(label) : "";
             var clickCode:String = null;
