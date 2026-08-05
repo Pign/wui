@@ -1,45 +1,37 @@
 package wui.state;
 
 /**
- * Reactive state container. Holds a value and notifies subscribers on change.
- *
- * In the pure C++ pipeline, State<T> compiles via hxcpp and subscriber
- * lambdas directly call C++/WinRT control setters — no bridge needed.
+ * Reactive state container, backed by `rui.state.State` — the core shared with
+ * the other La Pavoiserie backends. The subscriber list is registered as the
+ * platform sink, so a write notifies it exactly as before.
  *
  * Usage:
  *   @:state var count:Int = 0;
  *   // The @:state macro wraps this as State<Int>
  *   // Then: count.value = 5; // notifies all subscribers
+ *
+ * IMPORTANT — this class does not run in a built app. `wui` is currently a
+ * transpiler: `WinUIGenerator` reads the typed AST and emits C++ statics
+ * (`s_<name>`, `s_<name>_listeners`, `notify_<name>()`), and the generated
+ * Visual Studio project links no hxcpp. So this type is the authoring surface
+ * and the model the macro reads — nothing more, until wui links hxcpp.
+ * See `haxe-sailfish/docs/wui-hxcpp.md` for that chantier.
  */
-class State<T> {
-    public var name:String;
-    var _value:T;
+class State<T> extends rui.state.State<T> {
     var _listeners:Array<T -> Void>;
 
     /** Global registry of all state instances by name. */
     public static var _registry:Map<String, Dynamic> = new Map();
 
     public function new(initial:T, stateName:String) {
-        _value = initial;
-        name = stateName;
+        super(initial, stateName);
         _listeners = [];
         _registry.set(stateName, this);
-    }
-
-    /** Get the current value. */
-    public var value(get, set):T;
-
-    function get_value():T {
-        return _value;
-    }
-
-    /** Set the value and notify all subscribers. */
-    function set_value(newValue:T):T {
-        _value = newValue;
-        for (listener in _listeners) {
-            listener(newValue);
-        }
-        return newValue;
+        // The subscriber list is the platform sink: in the C++ pipeline those
+        // lambdas call WinRT control setters directly.
+        setPlatformSink(function(v:T) {
+            for (listener in _listeners.copy()) listener(v);
+        });
     }
 
     /** Subscribe to value changes. */
@@ -50,16 +42,6 @@ class State<T> {
     /** Unsubscribe from value changes. */
     public function unsubscribe(fn:T -> Void):Void {
         _listeners.remove(fn);
-    }
-
-    /** Read the current value. Alias for `value`. **/
-    public function get():T {
-        return _value;
-    }
-
-    /** Set a new value and notify subscribers. Alias for `value = x`. **/
-    public function set(v:T):Void {
-        value = v;
     }
 
     // --- Convenience StateAction builders ---

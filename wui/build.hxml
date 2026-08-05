@@ -1,4 +1,5 @@
 -cp src
+-lib rui
 -cp tools
 --main tools.cli.CLI
 --neko bin/wui.n
