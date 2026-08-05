@@ -29,9 +29,13 @@ package wui.bridge;
 
 	## Status
 
-	Compiles, generates, and packs into `lib<App>.lib` on Windows with MSVC.
-	See `wui-hxcpp.md` in the atelier repo for the sequence and what each
-	increment proves.
+	**W1 done, verified on Windows.** MSVC links the hxcpp library into the
+	WinUI app, `OnLaunched` calls in, Haxe executes, and the window runs.
+
+	What this does *not* mean: the app's buttons are still driven by C++ the
+	generator emitted, not by the runtime. Booting Haxe and letting Haxe drive
+	the UI are different steps -- see `wui-hxcpp.md` in the atelier repo for the
+	sequence and what each increment proves.
 **/
 #if cpp
 @:cppFileCode('
