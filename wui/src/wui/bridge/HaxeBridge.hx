@@ -3,9 +3,9 @@ package wui.bridge;
 /**
 	The entry point WinUI calls to start the Haxe runtime.
 
-	`wui` is currently a transpiler: the generated Visual Studio project links no
-	hxcpp, so no Haxe runs in a built app. This class is the first step out of
-	that — increment **W1** of the `wui`-on-hxcpp chantier.
+	`wui` used to be a pure transpiler: the generated project linked no hxcpp, so
+	no Haxe ran in a built app. It does now — this class is what boots it, and
+	what native code calls back into.
 
 	## How the boot works
 
@@ -29,13 +29,15 @@ package wui.bridge;
 
 	## Status
 
-	**W1 done, verified on Windows.** MSVC links the hxcpp library into the
-	WinUI app, `OnLaunched` calls in, Haxe executes, and the window runs.
+	**W1 and W2 done, both verified on Windows by clicking.** MSVC links the
+	hxcpp library, `OnLaunched` boots it, and a button whose action is a Haxe
+	closure runs that closure — arbitrary Haxe, outside the four verbs the
+	generator can translate.
 
-	What this does *not* mean: the app's buttons are still driven by C++ the
-	generator emitted, not by the runtime. Booting Haxe and letting Haxe drive
-	the UI are different steps -- see `wui-hxcpp.md` in the atelier repo for the
-	sequence and what each increment proves.
+	Still transpiled: everything else. State lives in C++ statics, and the
+	generator still turns `StateAction`s into C++ (and still guesses an action
+	from a button's label when none is given). W3 moves the state, W4 removes
+	the translation — see `wui-hxcpp.md` in the atelier repo.
 **/
 #if cpp
 @:cppFileCode('
