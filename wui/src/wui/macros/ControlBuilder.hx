@@ -60,9 +60,18 @@ class ControlBuilder {
 			}
 
 			switch (field.kind) {
-				case FVar(t, _):
+				case FVar(t, init):
 					var name = field.name;
 					var setter = "set_" + name;
+
+					// The initialiser says what an absent property means, and this
+					// is where it would be lost: the field becomes a property and
+					// the default is deliberately not emitted as an assignment.
+					// Stash it as metadata so the vocabulary can still read it.
+					var meta = field.meta == null ? [] : field.meta.copy();
+					if (init != null) {
+						meta.push({name: ":defaultValue", params: [init], pos: field.pos});
+					}
 
 					// The declaration becomes a property backed by the map the
 					// rest of wui already reads.
@@ -71,7 +80,7 @@ class ControlBuilder {
 						doc: field.doc,
 						access: field.access,
 						pos: field.pos,
-						meta: field.meta,
+						meta: meta,
 						kind: FProp("default", "set", t, null)
 					});
 
