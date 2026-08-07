@@ -1,166 +1,198 @@
 package wui.nui;
 
-import nui.PropValue;
+#if macro
+import haxe.macro.Context;
+import haxe.macro.Type;
+
+using haxe.macro.Tools;
+#end
 
 /**
-	What kind of value a property holds.
+	What `wui` can render, read from the controls themselves.
 
-	The markup needs this. `qui`'s existing `jsx()` guesses from the attribute
-	name — a hardcoded list where `text`/`title`/`label` are strings and
-	`spacing` is an int — and has to special-case `value` by tag, because
-	`<Slider value=…>` is a number and `<ComboBox value=…>` is a string. A schema
-	knows, per node type, so nothing has to be guessed.
-**/
-enum PropKind {
-	KString;
-	KInt;
-	KFloat;
-	KBool;
-	KCallback;
-}
+	## Two readers, one source
 
-/** What one property of a node type may hold. **/
-typedef PropSpec = {
-	/** What `{expr}` becomes: `PString`, `PInt`, `PCallback`… **/
-	var kind:PropKind;
+	The knowledge has two audiences, and trying to serve both with one generated
+	table failed outright: **Haxe forbids a type carrying `@:build` from being
+	used inside a macro**, and this is consumed at macro time by
+	`wui.macros.NodeValidator` and by `mui.macros.Backend`.
 
-	/** Absent is an error; the macro refuses to compile a node without it. **/
-	var required:Bool;
+	So there is no table. This reads the `wui.ui.*` classes **on demand**, at
+	macro time, which is the only moment its callers need an answer. The other
+	audience — the reconciler, at runtime, wanting to know what an absent
+	property becomes — is served by `wui.nui.Defaults`, a small generated map.
 
-	/**
-		What to apply when a nullable property stops being carried.
+	Two views, one place they are derived from: a `@:node` class is a type, its
+	`@:winrt` vars are its properties, and their Haxe declarations give the name,
+	the kind, the nullability and the default.
 
-		This is why the contract needs no `clearProp`. "Erase this property" is
-		not well defined — erase a colour to *what*? — but "apply this value" is,
-		and the value is declared here, next to the property it belongs to.
-		`null` means the property cannot be dropped once set.
-	**/
-	var ?whenAbsent:PropValue;
-};
+	## Why it is not in `nui`
 
-/**
-	What `wui` can render, and with which properties.
+	Nobody writes against a common core: `mui` picks its target at compile time,
+	so the vocabulary that matters while authoring is the *target backend's*, and
+	the useful error is "`placeholder` does not exist **here**". A core would also
+	become the union of five widget sets — `wui` has `ProgressRing`, `cui` has
+	`Table` — turning `nui` from *what a node is* into *which nodes exist*.
+
+	What must stay common is the **naming**, which `nui` settled in B2. A
+	discipline, not a vocabulary.
 
 	## Why "vocabulary" and not "schema"
 
-	A schema is a document you declare. That describes this file, which lists
-	types and their properties by hand — but it does **not** describe what the
-	other backends will do. `qui`'s node types *are existing Haxe classes*
-	(`ui.Slider` with `public var value(default, set):Float`), so its vocabulary
-	is **read from the types**, exhaustive by construction and unable to drift.
-	Its types are classes; `wui`'s are strings the C++ knows how to build, with
-	no class behind them.
-
-	Nothing is shared between those two artefacts. What is shared is the
-	**question `mui` asks**: do you know this type, which attributes does it take,
-	of what kind, which are required. The name says what is described and stays
-	silent on how it is obtained. `wui` has to declare because its vocabulary
-	lives in C++, where nothing can be read back.
-
-	## Why this lives here and not in `nui`
-
-	It was tempting to put a shared core vocabulary in `nui`. It does not earn
-	its place:
-
-	- **Nobody writes against a core.** `mui` picks its target at compile time,
-	  so the schema that matters while authoring is the *target backend's*. The
-	  useful error is "`placeholder` does not exist here", not "`placeholder` is
-	  not in the core".
-	- **The one real cross-backend case degrades instead.** A tree arriving as
-	  data — over a protocol, from a devtool — meets `?TypeName`, which is the
-	  honest answer and needs no guarantee.
-	- **A core would become the union of five widget sets.** `wui` has
-	  `ProgressRing` and `InfoBar`; `cui` has `Table` and `Tabs`. Hoisting those
-	  would turn `nui` from *what a node is* into *which nodes exist*, and change
-	  it every time any backend grew a widget.
-
-	What genuinely has to stay common is the **naming** — that five backends do
-	not call the same thing `text`, `content` and `label`. `nui` already settled
-	that in B2 (`type` not `viewType`; text is a plain property). That is a
-	discipline, and it is much smaller than a vocabulary.
-
-	So: local schema, no contract change, and if `qui` and `cui` adopt the same
-	shape then a common core becomes an observation rather than a bet. Same
-	discipline B4 taught — do not generalise from one sample.
+	A schema is a document you declare. `qui`'s node types *are* existing Haxe
+	classes, so its vocabulary is read from them; `wui`'s are strings the C++
+	knows how to build. Nothing is shared between those artefacts — only the
+	question `mui` asks. The name says what is described and stays silent on how
+	it is obtained.
 **/
 class Vocabulary {
-	/**
-		Node types `wui` knows how to build, with their properties.
+	#if macro
+	static inline var CONTROLS = "wui/ui";
 
-		Kept in step with `wui_node_create` in the generated node runtime: a type
-		here that the C++ cannot build would compile and then render `?Type`,
-		which is the failure this whole schema exists to prevent.
-	**/
-	public static final types:Map<String, Map<String, PropSpec>> = [
-		"VStack" => [
-			"spacing" => {kind: KFloat, required: false, whenAbsent: PFloat(0)}
-		],
-		"HStack" => [
-			"spacing" => {kind: KFloat, required: false, whenAbsent: PFloat(0)}
-		],
-		"Text" => [
-			"text" => {kind: KString, required: true}
-		],
-		"Button" => [
-			"text" => {kind: KString, required: true},
-			"onClick" => {kind: KCallback, required: false}
-		],
-		"TextBox" => [
-			"text" => {kind: KString, required: false, whenAbsent: PString("")},
-			"placeholder" => {kind: KString, required: false, whenAbsent: PString("")}
-		]
-	];
+	/** Universal properties, still declared here — see the note at the bottom. **/
+	static final UNIVERSAL = ["width" => "KFloat", "height" => "KFloat",
+		"visible" => "KBool", "enabled" => "KBool"];
 
-	/** Properties every type accepts, so each entry above need not repeat them. **/
-	public static final universal:Map<String, PropSpec> = [
-		"width" => {kind: KFloat, required: false},
-		"height" => {kind: KFloat, required: false},
-		"visible" => {kind: KBool, required: false, whenAbsent: PBool(true)},
-		"enabled" => {kind: KBool, required: false, whenAbsent: PBool(true)}
-	];
+	static var cache:Map<String, Map<String, String>> = null;
 
+	/** Does `wui` know how to build this node type? **/
 	public static function knows(type:String):Bool {
-		return types.exists(type);
+		return all().exists(type);
 	}
 
-	public static function spec(type:String, key:String):Null<PropSpec> {
-		var own = types.get(type);
-		if (own != null && own.exists(key)) return own.get(key);
-		return universal.exists(key) ? universal.get(key) : null;
-	}
-
-	/** Keys a node of this type may carry. **/
+	/** Every property this type accepts. **/
 	public static function keysOf(type:String):Array<String> {
-		var out = [for (k in universal.keys()) k];
-		var own = types.get(type);
+		var own = all().get(type);
+		var out = [for (k in UNIVERSAL.keys()) k];
 		if (own != null) for (k in own.keys()) out.push(k);
 		return out;
 	}
 
-	/** Keys a node of this type must carry. **/
+	/** Properties this type requires: not nullable, and with no declared default. **/
 	public static function requiredOf(type:String):Array<String> {
 		var out = [];
-		var own = types.get(type);
-		if (own != null) {
-			for (k in own.keys()) if (own.get(k).required) out.push(k);
-		}
+		var cls = classOf(type);
+		if (cls == null) return out;
+
+		eachProp(cls, function(field, kind) {
+			if (!isNullable(field.type) && !field.meta.has(":defaultValue")) out.push(field.name);
+		});
 		return out;
 	}
 
-	/** What kind of value `key` holds on `type`, or `null` if it has no such property. **/
-	public static function kindOf(type:String, key:String):Null<PropKind> {
-		var s = spec(type, key);
-		return s == null ? null : s.kind;
+	/** Which `PropValue` constructor a property takes, by name. `null` if unknown. **/
+	public static function kindOf(type:String, key:String):Null<String> {
+		var own = all().get(type);
+		if (own != null && own.exists(key)) return own.get(key);
+		return UNIVERSAL.exists(key) ? UNIVERSAL.get(key) : null;
 	}
 
-	/**
-		What to apply when `key` disappears from a node of `type`.
-
-		`null` means nothing sensible can be applied, and the reconciler leaves
-		the old value alone rather than guessing.
-	**/
-	public static function whenAbsent(type:String, key:String):Null<PropValue> {
-		var s = spec(type, key);
-		return s == null ? null : s.whenAbsent;
+	/** Every known type, sorted, for an error message that helps. **/
+	public static function types():Array<String> {
+		var out = [for (t in all().keys()) t];
+		out.sort(function(a, b) return a < b ? -1 : (a > b ? 1 : 0));
+		return out;
 	}
+
+	// ---- reading the controls ----
+
+	static function all():Map<String, Map<String, String>> {
+		if (cache != null) return cache;
+		cache = new Map();
+
+		for (module in modules()) {
+			var cls = resolveClass("wui.ui." + module);
+			if (cls == null) continue;
+
+			var type = nodeNameOf(cls);
+			if (type == null) continue;
+
+			var props = new Map<String, String>();
+			eachProp(cls, function(field, kind) props.set(field.name, kind));
+			cache.set(type, props);
+		}
+		return cache;
+	}
+
+	static function modules():Array<String> {
+		for (path in Context.getClassPath()) {
+			var dir = haxe.io.Path.join([path, CONTROLS]);
+			if (!sys.FileSystem.exists(dir)) continue;
+
+			var out = [];
+			for (entry in sys.FileSystem.readDirectory(dir)) {
+				if (StringTools.endsWith(entry, ".hx")) out.push(entry.substr(0, entry.length - 3));
+			}
+			return out;
+		}
+		return [];
+	}
+
+	static function classOf(type:String):Null<ClassType> {
+		for (module in modules()) {
+			var cls = resolveClass("wui.ui." + module);
+			if (cls != null && nodeNameOf(cls) == type) return cls;
+		}
+		return null;
+	}
+
+	static function resolveClass(path:String):Null<ClassType> {
+		try {
+			return switch (Context.getType(path)) {
+				case TInst(ref, _): ref.get();
+				case _: null;
+			};
+		} catch (e:Dynamic) {
+			return null;
+		}
+	}
+
+	public static function nodeNameOf(cls:ClassType):Null<String> {
+		var meta = cls.meta.extract(":node");
+		if (meta.length == 0 || meta[0].params.length == 0) return null;
+		return switch (meta[0].params[0].expr) {
+			case EConst(CString(s, _)): s;
+			case _: null;
+		};
+	}
+
+	/** Walk the `@:winrt` properties of a class and its ancestors, once each. **/
+	public static function eachProp(cls:ClassType, fn:(ClassField, String) -> Void):Void {
+		var seen = new Map<String, Bool>();
+		var current = cls;
+
+		while (current != null) {
+			for (field in current.fields.get()) {
+				if (!field.meta.has(":winrt") || seen.exists(field.name)) continue;
+				seen.set(field.name, true);
+
+				var kind = kindOfType(field.type);
+				if (kind != null) fn(field, kind);
+			}
+			current = current.superClass == null ? null : current.superClass.t.get();
+		}
+	}
+
+	public static function isNullable(t:Type):Bool {
+		return switch (t) {
+			case TAbstract(ref, _) if (ref.get().name == "Null"): true;
+			case _: false;
+		};
+	}
+
+	public static function kindOfType(t:Type):Null<String> {
+		return switch (t.follow()) {
+			case TAbstract(ref, _):
+				switch (ref.get().name) {
+					case "Int": "KInt";
+					case "Float": "KFloat";
+					case "Bool": "KBool";
+					case _: null;
+				}
+			case TInst(ref, _): ref.get().name == "String" ? "KString" : null;
+			case TFun(_, _): "KCallback";
+			case _: null;
+		};
+	}
+	#end
 }

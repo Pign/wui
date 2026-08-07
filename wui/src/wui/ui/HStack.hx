@@ -12,6 +12,7 @@ import wui.View;
  *       new Text("Right")
  *   ])
  */
+@:node("HStack")
 class HStack extends Stack {
     public function new(children:Array<View>, ?spacing:Float) {
         super("StackPanel", children);

@@ -5,7 +5,7 @@ import nui.Node;
 import nui.NodeSink;
 import nui.PropValue;
 import wui.nui.Mounted;
-import wui.nui.Vocabulary;
+import wui.nui.Defaults;
 
 /**
 	Compares a new `nui.Node` tree with the mounted one and calls the sink only
@@ -178,7 +178,7 @@ class Reconciler<Native> {
 		for (key in before.props.keys()) {
 			if (after.props.exists(key)) continue;
 
-			var fallback = Vocabulary.whenAbsent(after.type, key);
+			var fallback = Defaults.whenAbsent(after.type, key);
 			if (fallback != null) {
 				sink.applyProp(handle, after.type, key, fallback);
 			}

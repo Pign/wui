@@ -189,9 +189,7 @@ class NodeValidator {
 	}
 
 	static function sortedTypes():Array<String> {
-		var out = [for (t in Vocabulary.types.keys()) t];
-		out.sort(function(a, b) return a < b ? -1 : (a > b ? 1 : 0));
-		return out;
+		return Vocabulary.types();
 	}
 	#end
 }
