@@ -11,7 +11,6 @@ import wui.state.StateAction;
 	B2 — text is an ordinary property — so the declaration follows it and the
 	generator accepts both while the old name is still in the wild.
 **/
-@:node("Button")
 @:winuiType("Button")
 @:build(wui.macros.ControlBuilder.build())
 class Button extends View {

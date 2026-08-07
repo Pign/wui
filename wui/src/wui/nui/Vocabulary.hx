@@ -26,8 +26,8 @@ using haxe.macro.Tools;
 	audience — the reconciler, at runtime, wanting to know what an absent
 	property becomes — is served by `wui.nui.Defaults`, a small generated map.
 
-	Two views, one place they are derived from: a `@:node` class is a type, its
-	`@:winrt` vars are its properties, and their Haxe declarations give the name,
+	Two views, one place they are derived from: a class carrying `@:winuiType` is
+	a node type — named after itself — and its `@:winrt` vars are its properties, and their Haxe declarations give the name,
 	the kind, the nullability and the default.
 
 	## Why it is not in `nui`
@@ -202,7 +202,7 @@ class Vocabulary {
 	/**
 		The name the transpiled path uses, when it differs.
 
-		A control has two identities: `@:node` is nui's name, and the generator
+		A control has two identities: its class name is nui's, and the generator
 		holds WinUI's — `Text` against `TextBlock`. Nothing could bridge them,
 		because the transpiled name is a `super()` argument no macro can read, so
 		a lookup by type simply missed and a fallback on `View` hid it for the
@@ -217,13 +217,16 @@ class Vocabulary {
 		};
 	}
 
+	/**
+		The nui type a control is — its class name.
+
+		There used to be a `@:node("Text")` on a class called `Text`: the same
+		word twice, once as a string that could drift from the other. A control
+		is a node type because it maps to a real control, which `@:winuiType`
+		already says; what it is called needs no restating.
+	**/
 	public static function nodeNameOf(cls:ClassType):Null<String> {
-		var meta = cls.meta.extract(":node");
-		if (meta.length == 0 || meta[0].params.length == 0) return null;
-		return switch (meta[0].params[0].expr) {
-			case EConst(CString(s, _)): s;
-			case _: null;
-		};
+		return winuiNameOf(cls) == null ? null : cls.name;
 	}
 
 	/** Walk the `@:winrt` properties of a class and its ancestors, once each. **/

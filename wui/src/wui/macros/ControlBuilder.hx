@@ -22,7 +22,7 @@ using haxe.macro.Tools;
 	A declared field says three of those things by itself:
 
 	```haxe
-	@:node("Slider")
+	@:winuiType("Slider")
 	class Slider extends View {
 		@:winrt("Minimum")       public var min:Float;
 		@:winrt("StepFrequency") public var step:Null<Float>;

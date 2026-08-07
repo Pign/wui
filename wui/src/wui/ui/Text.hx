@@ -15,12 +15,11 @@ import wui.View;
 
 	## Two names, on purpose and for now
 
-	`@:node` is the **nui** type name; `super()` passes the **transpiled path's**,
-	which is WinUI's own (`TextBlock`). The two rendering paths grew separate
-	vocabularies, and rather than pretend otherwise the divergence is stated
-	here, in one place, until the transpiled path is retired or aligned.
+	The class name is the **nui** type; `@:winuiType` gives the **transpiled
+	path's**, which is WinUI's own (`TextBlock`). The two rendering paths grew
+	separate vocabularies, and rather than pretend otherwise the divergence is
+	stated here, in one place, until the transpiled path is retired or aligned.
 **/
-@:node("Text")
 @:winuiType("TextBlock")
 @:build(wui.macros.ControlBuilder.build())
 class Text extends View {
