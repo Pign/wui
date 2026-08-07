@@ -6,9 +6,6 @@ import wui.ui.Button;
 import wui.state.StateAction;
 import wui.ui.Spacer;
 import wui.ui.TextBox;
-import wui.modifiers.ViewModifier.FontStyle;
-import wui.modifiers.ViewModifier.ColorValue;
-import wui.modifiers.ViewModifier.HorizontalAlign;
 
 class Counter extends wui.App {
     @:state var count:Int = 0;

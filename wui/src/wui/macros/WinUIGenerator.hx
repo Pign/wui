@@ -9,7 +9,6 @@ import sys.io.File;
 import sys.FileSystem;
 import haxe.io.Path;
 import wui.macros.UIBuilder.ViewNode;
-import wui.macros.UIBuilder.ModifierData;
 
 using haxe.macro.Tools;
 #end
@@ -315,10 +314,8 @@ class WinUIGenerator {
             children: [{
                 viewType: "TextBlock",
                 children: [],
-                modifiers: [],
                 properties: textProps
             }],
-            modifiers: [],
             properties: defaultProps
         };
     }
@@ -383,9 +380,6 @@ class WinUIGenerator {
                         if (v != null) node.properties.set(key, v);
                     } else if (called == "onClick" && args.length > 0) {
                         node.properties.set("hasHaxeCallback", true);
-                    } else if (called != null) {
-                        var modifier = extractModifier(called, args);
-                        if (modifier != null) node.modifiers.push(modifier);
                     }
 
                 case _:
@@ -485,7 +479,7 @@ class WinUIGenerator {
                 var props:Map<String, Dynamic> = new Map();
                 props.set("orientation", "Vertical");
                 if (spacing != null) props.set("spacing", spacing);
-                { viewType: "StackPanel", children: children, modifiers: [], properties: props };
+                { viewType: "StackPanel", children: children, properties: props };
 
             case "wui.ui.HStack":
                 var children = args.length > 0 ? extractChildArray(args[0]) : [];
@@ -493,11 +487,11 @@ class WinUIGenerator {
                 var props:Map<String, Dynamic> = new Map();
                 props.set("orientation", "Horizontal");
                 if (spacing != null) props.set("spacing", spacing);
-                { viewType: "StackPanel", children: children, modifiers: [], properties: props };
+                { viewType: "StackPanel", children: children, properties: props };
 
             case "wui.ui.ZStack":
                 var children = args.length > 0 ? extractChildArray(args[0]) : [];
-                { viewType: "Grid", children: children, modifiers: [], properties: new Map() };
+                { viewType: "Grid", children: children, properties: new Map() };
 
             case "wui.ui.Text":
                 var props:Map<String, Dynamic> = new Map();
@@ -521,7 +515,7 @@ class WinUIGenerator {
                     var text = args.length > 0 ? extractStringOrExpr(args[0]) : "Text";
                     props.set("text", text);
                 }
-                { viewType: "TextBlock", children: [], modifiers: [], properties: props };
+                { viewType: "TextBlock", children: [], properties: props };
 
             case "wui.ui.Button":
                 var label = args.length > 0 ? extractStringOrExpr(args[0]) : "Button";
@@ -537,7 +531,7 @@ class WinUIGenerator {
                 if (args.length > 2 && !isNullLiteral(args[2])) {
                     props.set("hasHaxeCallback", true);
                 }
-                { viewType: "Button", children: [], modifiers: [], properties: props };
+                { viewType: "Button", children: [], properties: props };
 
             case "wui.ui.ListView":
                 // Only the bound state's name is taken here. The rows are Haxe's
@@ -548,7 +542,7 @@ class WinUIGenerator {
                     var stateRef = deepExtractStateRef(args[0]);
                     if (stateRef != null) props.set("boundState", stateRef);
                 }
-                { viewType: "ListView", children: [], modifiers: [], properties: props };
+                { viewType: "ListView", children: [], properties: props };
 
             case "wui.ui.Spacer":
                 var props:Map<String, Dynamic> = new Map();
@@ -556,7 +550,7 @@ class WinUIGenerator {
                     var minSize = extractFloatValue(args[0]);
                     if (minSize != null) props.set("minSize", minSize);
                 }
-                { viewType: "Spacer", children: [], modifiers: [], properties: props };
+                { viewType: "Spacer", children: [], properties: props };
 
             case "wui.ui.TextBox":
                 var props:Map<String, Dynamic> = new Map();
@@ -568,7 +562,7 @@ class WinUIGenerator {
                     var stateRef = deepExtractStateRef(args[1]);
                     if (stateRef != null) props.set("boundState", stateRef);
                 }
-                { viewType: "TextBox", children: [], modifiers: [], properties: props };
+                { viewType: "TextBox", children: [], properties: props };
 
             case "wui.ui.ToggleSwitch":
                 var props:Map<String, Dynamic> = new Map();
@@ -580,7 +574,7 @@ class WinUIGenerator {
                     var stateRef = deepExtractStateRef(args[1]);
                     if (stateRef != null) props.set("boundState", stateRef);
                 }
-                { viewType: "ToggleSwitch", children: [], modifiers: [], properties: props };
+                { viewType: "ToggleSwitch", children: [], properties: props };
 
             case "wui.ui.CheckBox":
                 var props:Map<String, Dynamic> = new Map();
@@ -592,7 +586,7 @@ class WinUIGenerator {
                     var stateRef = deepExtractStateRef(args[1]);
                     if (stateRef != null) props.set("boundState", stateRef);
                 }
-                { viewType: "CheckBox", children: [], modifiers: [], properties: props };
+                { viewType: "CheckBox", children: [], properties: props };
 
             case "wui.ui.Slider":
                 var props:Map<String, Dynamic> = new Map();
@@ -604,16 +598,16 @@ class WinUIGenerator {
                     if (stateRef != null) props.set("boundState", stateRef);
                 }
                 if (args.length > 3) props.set("step", extractFloatValue(args[3]));
-                { viewType: "Slider", children: [], modifiers: [], properties: props };
+                { viewType: "Slider", children: [], properties: props };
 
             case "wui.ui.Image":
                 var props:Map<String, Dynamic> = new Map();
                 if (args.length > 0) props.set("source", extractStringOrExpr(args[0]));
-                { viewType: "Image", children: [], modifiers: [], properties: props };
+                { viewType: "Image", children: [], properties: props };
 
             case "wui.ui.ScrollViewer":
                 var children = args.length > 0 ? [analyzeBodyExpr(args[0])] : [];
-                { viewType: "ScrollViewer", children: children, modifiers: [], properties: new Map() };
+                { viewType: "ScrollViewer", children: children, properties: new Map() };
 
             case "wui.ui.ProgressRing":
                 var props:Map<String, Dynamic> = new Map();
@@ -623,7 +617,7 @@ class WinUIGenerator {
                 } else {
                     props.set("isIndeterminate", "true");
                 }
-                { viewType: "ProgressRing", children: [], modifiers: [], properties: props };
+                { viewType: "ProgressRing", children: [], properties: props };
 
             default:
                 defaultNode();
@@ -656,10 +650,6 @@ class WinUIGenerator {
                     baseNode.properties.set("hasHaxeCallback", true);
                 }
 
-                var modifier = extractModifier(fieldName, args);
-                if (modifier != null) {
-                    baseNode.modifiers.push(modifier);
-                }
 
                 return baseNode;
             default:
@@ -671,77 +661,6 @@ class WinUIGenerator {
     /**
      * Extract a modifier from a method name and arguments.
      */
-    static function extractModifier(name:String, args:Array<TypedExpr>):ModifierData {
-        return switch (name) {
-            case "padding":
-                var amount = args.length > 0 ? extractFloatValue(args[0]) : null;
-                { type: "Padding", values: [amount != null ? amount : 12.0] };
-            case "margin":
-                var amount = args.length > 0 ? extractFloatValue(args[0]) : null;
-                { type: "Margin", values: [amount != null ? amount : 12.0] };
-            case "font":
-                var style = args.length > 0 ? extractEnumName(args[0]) : "Body";
-                { type: "Font", values: [style] };
-            case "fontSize":
-                var size = args.length > 0 ? extractFloatValue(args[0]) : 14.0;
-                { type: "FontSize", values: [size] };
-            case "bold":
-                { type: "Bold", values: [] };
-            case "italic":
-                { type: "Italic", values: [] };
-            case "foregroundColor":
-                var color = args.length > 0 ? extractEnumName(args[0]) : "Black";
-                { type: "ForegroundColor", values: [color] };
-            case "background":
-                var color = args.length > 0 ? extractEnumName(args[0]) : "White";
-                { type: "Background", values: [color] };
-            case "opacity":
-                var value = args.length > 0 ? extractFloatValue(args[0]) : 1.0;
-                { type: "Opacity", values: [value] };
-            case "width":
-                var w = args.length > 0 ? extractFloatValue(args[0]) : 0.0;
-                { type: "Width", values: [w] };
-            case "height":
-                var h = args.length > 0 ? extractFloatValue(args[0]) : 0.0;
-                { type: "Height", values: [h] };
-            case "cornerRadius":
-                var r = args.length > 0 ? extractFloatValue(args[0]) : 0.0;
-                { type: "CornerRadius", values: [r] };
-            case "horizontalAlignment":
-                var align = args.length > 0 ? extractEnumName(args[0]) : "Stretch";
-                { type: "HorizontalAlignment", values: [align] };
-            case "verticalAlignment":
-                var align = args.length > 0 ? extractEnumName(args[0]) : "Stretch";
-                { type: "VerticalAlignment", values: [align] };
-            case "spacing":
-                var s = args.length > 0 ? extractFloatValue(args[0]) : 8.0;
-                { type: "Spacing", values: [s] };
-            case "disabled":
-                var d = args.length > 0 ? extractBoolValue(args[0]) : true;
-                { type: "Disabled", values: [d] };
-            case "visible":
-                var v = args.length > 0 ? extractBoolValue(args[0]) : true;
-                { type: "Visible", values: [v] };
-            case "toolTip":
-                var text = args.length > 0 ? extractStringOrExpr(args[0]) : "";
-                { type: "ToolTip", values: [text] };
-            case "borderBrush":
-                var color = args.length > 0 ? extractEnumName(args[0]) : "Gray";
-                { type: "BorderBrush", values: [color] };
-            case "borderThickness":
-                var t = args.length > 0 ? extractFloatValue(args[0]) : 1.0;
-                { type: "BorderThickness", values: [t] };
-            case "frame":
-                var vals:Array<Dynamic> = [];
-                for (i in 0...6) {
-                    vals.push(i < args.length ? extractFloatValue(args[i]) : null);
-                }
-                { type: "Frame", values: vals };
-            default:
-                null;
-        };
-    }
-
     // ---- Value Extraction Helpers ----
 
     static function extractChildArray(expr:TypedExpr):Array<ViewNode> {
@@ -1000,7 +919,6 @@ class WinUIGenerator {
         return {
             viewType: "StackPanel",
             children: [],
-            modifiers: [],
             properties: new Map()
         };
     }

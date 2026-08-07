@@ -5,7 +5,6 @@ import wui.ui.Text;
 import wui.ui.Button;
 import wui.ui.TextBox;
 import wui.ui.ListView;
-import wui.modifiers.ViewModifier.FontStyle;
 
 /**
 	The acceptance app: `sui`'s todo-app, on `wui`.

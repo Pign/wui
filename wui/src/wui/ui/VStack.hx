@@ -12,6 +12,7 @@ import wui.View;
  *   ], 8)
  */
 @:node("VStack")
+@:winuiType("StackPanel")
 class VStack extends Stack {
     public function new(children:Array<View>, ?spacing:Float) {
         super("StackPanel", children);

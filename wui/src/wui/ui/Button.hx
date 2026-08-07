@@ -12,6 +12,7 @@ import wui.state.StateAction;
 	generator accepts both while the old name is still in the wild.
 **/
 @:node("Button")
+@:winuiType("Button")
 @:build(wui.macros.ControlBuilder.build())
 class Button extends View {
 	@:winrt("Content")

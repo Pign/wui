@@ -156,6 +156,11 @@ class Vocabulary {
 			var props = new Map<String, String>();
 			eachProp(cls, function(field, kind) props.set(field.name, kind));
 			cache.set(type, props);
+
+			// Answer to the transpiled name as well: same control, same
+			// properties, two vocabularies naming it.
+			var winui = winuiNameOf(cls);
+			if (winui != null && !cache.exists(winui)) cache.set(winui, props);
 		}
 		return cache;
 	}
@@ -177,7 +182,8 @@ class Vocabulary {
 	static function classOf(type:String):Null<ClassType> {
 		for (module in modules()) {
 			var cls = resolveClass("wui.ui." + module);
-			if (cls != null && nodeNameOf(cls) == type) return cls;
+			if (cls == null) continue;
+			if (nodeNameOf(cls) == type || winuiNameOf(cls) == type) return cls;
 		}
 		return null;
 	}
@@ -191,6 +197,24 @@ class Vocabulary {
 		} catch (e:Dynamic) {
 			return null;
 		}
+	}
+
+	/**
+		The name the transpiled path uses, when it differs.
+
+		A control has two identities: `@:node` is nui's name, and the generator
+		holds WinUI's — `Text` against `TextBlock`. Nothing could bridge them,
+		because the transpiled name is a `super()` argument no macro can read, so
+		a lookup by type simply missed and a fallback on `View` hid it for the
+		shared properties. A type-specific one would have been dropped in silence.
+	**/
+	public static function winuiNameOf(cls:ClassType):Null<String> {
+		var meta = cls.meta.extract(":winuiType");
+		if (meta.length == 0 || meta[0].params.length == 0) return null;
+		return switch (meta[0].params[0].expr) {
+			case EConst(CString(s, _)): s;
+			case _: null;
+		};
 	}
 
 	public static function nodeNameOf(cls:ClassType):Null<String> {

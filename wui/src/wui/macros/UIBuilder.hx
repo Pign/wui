@@ -374,7 +374,6 @@ $refreshLists
         }
 
         // Apply modifiers
-        applyModifiers(varName, "StackPanel", node.modifiers, lines);
         applyDeclaredProps(varName, node.viewType, node, lines);
 
         // Generate children
@@ -390,7 +389,6 @@ $refreshLists
         var varName = nextVar("grid");
         lines.push('winrt_controls::Grid $varName;');
 
-        applyModifiers(varName, "Grid", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
 
@@ -443,7 +441,6 @@ $refreshLists
             }
         }
 
-        applyModifiers(varName, "TextBlock", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
 
@@ -476,7 +473,6 @@ $refreshLists
             lines.push('});');
         }
 
-        applyModifiers(varName, "Button", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
 
@@ -500,7 +496,6 @@ $refreshLists
             lines.push('s_list_${stateName} = $varName;');
         }
 
-        applyModifiers(varName, "ListView", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
@@ -540,7 +535,6 @@ $refreshLists
             });
         }
 
-        applyModifiers(varName, "TextBox", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
@@ -572,7 +566,6 @@ $refreshLists
             });
         }
 
-        applyModifiers(varName, "ToggleSwitch", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
@@ -606,7 +599,6 @@ $refreshLists
             });
         }
 
-        applyModifiers(varName, "Slider", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
@@ -626,7 +618,6 @@ $refreshLists
             lines.push('}');
         }
 
-        applyModifiers(varName, "Image", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
@@ -641,7 +632,6 @@ $refreshLists
             lines.push('$varName.Content($contentVar);');
         }
 
-        applyModifiers(varName, "ScrollViewer", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
@@ -675,7 +665,6 @@ $refreshLists
             });
         }
 
-        applyModifiers(varName, "CheckBox", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
@@ -694,7 +683,6 @@ $refreshLists
             if (value != null) lines.push('$varName.Value($value);');
         }
 
-        applyModifiers(varName, "ProgressRing", node.modifiers, lines);
 
         applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
@@ -781,85 +769,6 @@ $refreshLists
         };
     }
 
-    static function applyModifiers(varName:String, controlType:String, modifiers:Array<ModifierData>, lines:Array<String>):Void {
-        for (mod in modifiers) {
-            switch (mod.type) {
-                case "Padding":
-                    lines.push('$varName.Padding(wui::runtime::uniformThickness(${mod.values[0]}));');
-                case "Margin":
-                    lines.push('$varName.Margin(wui::runtime::uniformThickness(${mod.values[0]}));');
-                case "Width":
-                    lines.push('$varName.Width(${mod.values[0]});');
-                case "Height":
-                    lines.push('$varName.Height(${mod.values[0]});');
-                case "Opacity":
-                    lines.push('$varName.Opacity(${mod.values[0]});');
-                case "CornerRadius":
-                    lines.push('$varName.CornerRadius(wui::runtime::uniformCornerRadius(${mod.values[0]}));');
-                case "HorizontalAlignment":
-                    var align = mod.values[0];
-                    lines.push('$varName.HorizontalAlignment(winrt_xaml::HorizontalAlignment::$align);');
-                case "VerticalAlignment":
-                    var align = mod.values[0];
-                    lines.push('$varName.VerticalAlignment(winrt_xaml::VerticalAlignment::$align);');
-                case "Background":
-                    var colorCode = generateColorBrush(mod.values[0]);
-                    lines.push('$varName.Background($colorCode);');
-                case "ForegroundColor":
-                    if (controlType == "TextBlock") {
-                        var colorCode = generateColorBrush(mod.values[0]);
-                        lines.push('$varName.Foreground($colorCode);');
-                    }
-                case "Font":
-                    if (controlType == "TextBlock") {
-                        applyFontStyle(varName, mod.values[0], lines);
-                    }
-                case "FontSize":
-                    if (controlType == "TextBlock") {
-                        lines.push('$varName.FontSize(${mod.values[0]});');
-                    }
-                case "Bold":
-                    if (controlType == "TextBlock") {
-                        lines.push('$varName.FontWeight(winrt::Windows::UI::Text::FontWeight{ 700 });');
-                    }
-                case "Italic":
-                    if (controlType == "TextBlock") {
-                        lines.push('$varName.FontStyle(winrt::Windows::UI::Text::FontStyle::Italic);');
-                    }
-                case "Disabled":
-                    var isDisabled = mod.values[0];
-                    lines.push('$varName.IsEnabled(!$isDisabled);');
-                case "Visible":
-                    var isVisible = mod.values[0];
-                    if (Std.string(isVisible) == "false") {
-                        lines.push('$varName.Visibility(winrt_xaml::Visibility::Collapsed);');
-                    }
-                case "ToolTip":
-                    var escaped = escapeWideString(Std.string(mod.values[0]));
-                    lines.push('winrt_controls::ToolTipService::SetToolTip($varName, winrt::box_value(L"$escaped"));');
-                case "BorderBrush":
-                    var colorCode = generateColorBrush(mod.values[0]);
-                    lines.push('$varName.BorderBrush($colorCode);');
-                case "BorderThickness":
-                    lines.push('$varName.BorderThickness(wui::runtime::uniformThickness(${mod.values[0]}));');
-                case "Spacing":
-                    if (controlType == "StackPanel") {
-                        lines.push('$varName.Spacing(${mod.values[0]});');
-                    }
-                case "Frame":
-                    // Frame(width, height, minWidth, maxWidth, minHeight, maxHeight)
-                    if (mod.values[0] != null) lines.push('$varName.Width(${mod.values[0]});');
-                    if (mod.values[1] != null) lines.push('$varName.Height(${mod.values[1]});');
-                    if (mod.values[2] != null) lines.push('$varName.MinWidth(${mod.values[2]});');
-                    if (mod.values[3] != null) lines.push('$varName.MaxWidth(${mod.values[3]});');
-                    if (mod.values[4] != null) lines.push('$varName.MinHeight(${mod.values[4]});');
-                    if (mod.values[5] != null) lines.push('$varName.MaxHeight(${mod.values[5]});');
-                default:
-                    lines.push('// TODO: modifier ${mod.type}');
-            }
-        }
-    }
-
     static function applyFontStyle(varName:String, style:String, lines:Array<String>):Void {
         switch (style) {
             case "Caption":
@@ -937,11 +846,5 @@ $refreshLists
 typedef ViewNode = {
     viewType:String,
     children:Array<ViewNode>,
-    modifiers:Array<ModifierData>,
     properties:Map<String, Dynamic>
-};
-
-typedef ModifierData = {
-    type:String,
-    values:Array<Dynamic>
 };

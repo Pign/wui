@@ -4,6 +4,7 @@ import wui.View;
 
 /** A single-line text field. **/
 @:node("TextBox")
+@:winuiType("TextBox")
 @:build(wui.macros.ControlBuilder.build())
 class TextBox extends View {
 	@:winrt("Text")

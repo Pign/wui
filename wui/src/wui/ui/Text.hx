@@ -21,6 +21,7 @@ import wui.View;
 	here, in one place, until the transpiled path is retired or aligned.
 **/
 @:node("Text")
+@:winuiType("TextBlock")
 @:build(wui.macros.ControlBuilder.build())
 class Text extends View {
 	@:winrt("Text")

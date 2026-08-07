@@ -4,9 +4,6 @@ import wui.ui.HStack;
 import wui.ui.Text;
 import wui.ui.Button;
 import wui.ui.Spacer;
-import wui.modifiers.ViewModifier.FontStyle;
-import wui.modifiers.ViewModifier.ColorValue;
-import wui.modifiers.ViewModifier.HorizontalAlign;
 
 class HelloWorld extends wui.App {
     static function main() {
