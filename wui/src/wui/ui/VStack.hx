@@ -13,9 +13,13 @@ import wui.View;
  */
 @:winuiType("StackPanel")
 class VStack extends Stack {
+	// Declared with its default, so the generated `create` applies it: both
+	// stacks are a StackPanel and only this tells them apart.
+	@:winrt("Orientation") public var orientation:String = "Vertical";
+
     public function new(children:Array<View>, ?spacing:Float) {
         super("StackPanel", children);
-        properties.set("orientation", "Vertical");
+        // orientation carries its declared default
         if (spacing != null) this.spacing = spacing;
     }
 }
