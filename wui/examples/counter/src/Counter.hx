@@ -21,67 +21,61 @@ class Counter extends wui.App {
     }
 
     override function body():View {
-        return new VStack([
-            new Spacer(),
-            new Text("Counter")
-                .font(Title)
-                .padding(),
-            new Text("Count: " + count)
-                .font(TitleLarge)
-                .foregroundColor(AccentColor)
-                .padding(),
-            new HStack([
-                new Button("-", null, count.dec(1))
-                    .padding(),
-                new Button("Reset", null, count.setTo(0))
-                    .padding(),
-                new Button("+", null, count.inc(1))
-                    .padding()
-            ], 8),
-            // Trois closures Haxe, après trois boutons StateAction : si la
-            // numérotation de la macro et celle de l'exécution divergeaient, un
-            // clic exécuterait la *mauvaise* closure plutôt que rien du tout —
-            // ce que trois libellés distincts rendent visible immédiatement.
-            new HStack([
-                new Button("Haxe A").onClick(() -> report("A")).padding(),
-                new Button("Haxe B").onClick(() -> report("B")).padding(),
-                new Button("Haxe C").onClick(() -> report("C")).padding()
-            ], 8),
-            // W3 : l'écriture part de Haxe et l'affichage doit suivre.
-            //
-            // `count` vit ici, dans l'instance construite au démarrage ; le C++
-            // garde son `s_count`. Écrire `count.value` traverse le puits
-            // plateforme, le pont, puis le gestionnaire généré, qui affecte
-            // `s_count` et appelle `notify_count()` sur le thread UI.
-            //
-            // Attendu tant que W4 n'est pas fait : les boutons `+`/`-`/`Reset`
-            // modifient `s_count` sans prévenir Haxe, donc les deux valeurs
-            // divergent. Ce bouton-ci écrase l'écart en réaffectant depuis Haxe.
-            new Button("Haxe +10").onClick(() -> {
-                count.value = count.value + 10;
-                trace('[wui] count Haxe = ${count.value}');
-            }).padding(),
-            // W4 : `Custom` transportait déjà du code arbitraire dans l'enum, mais
-            // le traducteur ne le connaissait pas et le bouton perdait simplement
-            // son gestionnaire, sans un mot. Interprété à l'exécution, il marche.
-            // W5a : un état String, dans les deux sens.
-            //
-            // Le TextBox écrit vers Haxe par `applyExternal` — les effets sans
-            // écho vers la plateforme — sinon chaque frappe réécrirait le champ
-            // en cours d'édition et déplacerait le curseur. Le bouton ci-dessous
-            // écrit dans l'autre sens, et le champ doit suivre.
-            new TextBox("Tapez ici...", label).padding(),
-            new Text("Texte Haxe : " + label).padding(),
-            new Button("Haxe écrit le texte").onClick(() -> {
-                label.value = "écrit depuis Haxe (" + count.value + ")";
-                trace('[wui] label = ${label.value}');
-            }).padding(),
-            new Button("Custom ×2", null, Custom(() -> {
-                count.value = count.value * 2;
-                trace('[wui] Custom : count = ${count.value}');
-            })).padding(),
+        // Écrit en instructions : la macro suit désormais ce qu'on fait à une
+        // locale après sa déclaration, pas seulement son initialiseur.
+        var title = new Text("Counter");
+        title.font(Title);
+        title.padding();
+
+        var display = new Text("Count: " + count);
+        display.font(TitleLarge);
+        display.foregroundColor(AccentColor);
+        display.padding();
+
+        var minus = new Button("-", null, count.dec(1));
+        minus.padding();
+        var reset = new Button("Reset", null, count.setTo(0));
+        reset.padding();
+        var plus = new Button("+", null, count.inc(1));
+        plus.padding();
+
+        var a = new Button("Haxe A");
+        a.onClick(() -> report("A"));
+        a.padding();
+        var b = new Button("Haxe B");
+        b.onClick(() -> report("B"));
+        b.padding();
+        var c = new Button("Haxe C");
+        c.onClick(() -> report("C"));
+        c.padding();
+
+        var field = new TextBox("Tapez ici...", label);
+        field.padding();
+        var echo = new Text("Texte Haxe : " + label);
+        echo.padding();
+
+        var writer = new Button("Haxe écrit le texte");
+        writer.onClick(() -> {
+            label.value = "écrit depuis Haxe (" + count.value + ")";
+            trace('[wui] label = ${label.value}');
+        });
+        writer.padding();
+
+        var custom = new Button("Custom ×2", null, Custom(() -> {
+            count.value = count.value * 2;
+            trace('[wui] Custom : count = ${count.value}');
+        }));
+        custom.padding();
+
+        var root = new VStack([
+            new Spacer(), title, display,
+            new HStack([minus, reset, plus], 8),
+            new HStack([a, b, c], 8),
+            field, echo, writer, custom,
             new Spacer()
-        ]).horizontalAlignment(Center);
+        ]);
+        root.horizontalAlignment(Center);
+        return root;
     }
 
     /**

@@ -329,6 +329,70 @@ class WinUIGenerator {
     // Map of local variable names to their expressions (for temp var resolution)
     static var localExprs:Map<String, TypedExpr> = new Map();
 
+    /**
+     * What was done to a local *after* it was declared.
+     *
+     * Only the initialiser used to be recorded, so a view built in statements
+     * lost everything that followed:
+     *
+     *     var a = new Button("Haxe A");   // kept
+     *     a.onClick(() -> report("A"));   // lost
+     *     a.padding = 12;                 // lost
+     *
+     * The build still succeeded and the app still ran -- with half its controls
+     * missing. Silence again, from the tool this time.
+     */
+    static var localMutations:Map<String, Array<TypedExpr>> = new Map();
+
+    /** Which local, if any, this expression is acting on. **/
+    static function mutatedLocal(expr:TypedExpr):Null<String> {
+        return switch (expr.expr) {
+            case TBinop(OpAssign, {expr: TField({expr: TLocal(v)}, _)}, _): v.name;
+            case TCall({expr: TField({expr: TLocal(v)}, _)}, _): v.name;
+            case _: null;
+        };
+    }
+
+    /** Replay onto `node` what the block did to the local it came from. **/
+    static function applyMutations(name:String, node:ViewNode):ViewNode {
+        var pending = localMutations.get(name);
+        if (pending == null) return node;
+
+        for (expr in pending) {
+            switch (expr.expr) {
+                // `a.padding = 12`
+                case TBinop(OpAssign, {expr: TField(_, fa)}, value):
+                    var key = fieldNameOf(fa);
+                    if (key == null) continue;
+                    var v:Dynamic = extractFloatValue(value);
+                    if (v == null) v = extractStringOrExpr(value);
+                    if (v != null) node.properties.set(key, v);
+
+                // `a.onClick(...)`, `a.padding(...)`
+                case TCall({expr: TField(_, fa)}, args):
+                    var called = fieldNameOf(fa);
+                    if (called == "onClick" && args.length > 0) {
+                        node.properties.set("hasHaxeCallback", true);
+                    } else if (called != null) {
+                        var modifier = extractModifier(called, args);
+                        if (modifier != null) node.modifiers.push(modifier);
+                    }
+
+                case _:
+            }
+        }
+        return node;
+    }
+
+    static function fieldNameOf(fa:FieldAccess):Null<String> {
+        return switch (fa) {
+            case FInstance(_, _, cf): cf.get().name;
+            case FDynamic(sn): sn;
+            case FClosure(_, cf): cf.get().name;
+            case _: null;
+        };
+    }
+
     static function analyzeBodyExpr(texpr:TypedExpr):ViewNode {
         if (texpr == null) {
             return defaultNode();
@@ -339,12 +403,17 @@ class WinUIGenerator {
                 if (e != null) return analyzeBodyExpr(e);
 
             case TBlock(exprs):
-                // First pass: collect all local variable bindings
+                // First pass: the bindings, and what is done to them afterwards.
                 for (expr in exprs) {
                     switch (expr.expr) {
                         case TVar(v, e):
                             if (e != null) localExprs.set(v.name, e);
                         default:
+                            var target = mutatedLocal(expr);
+                            if (target != null) {
+                                if (!localMutations.exists(target)) localMutations.set(target, []);
+                                localMutations.get(target).push(expr);
+                            }
                     }
                 }
                 // Second pass: find the return or last expression
@@ -375,9 +444,10 @@ class WinUIGenerator {
                 return analyzeBodyExpr(e);
 
             case TLocal(v):
-                // Resolve temp variables to their original expressions
+                // Resolve temp variables to their original expressions, then
+                // replay whatever the block did to them afterwards.
                 var resolved = localExprs.get(v.name);
-                if (resolved != null) return analyzeBodyExpr(resolved);
+                if (resolved != null) return applyMutations(v.name, analyzeBodyExpr(resolved));
 
             case TVar(v, e):
                 if (e != null) {
