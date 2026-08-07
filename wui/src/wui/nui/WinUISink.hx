@@ -43,6 +43,15 @@ import wui.bridge.Callbacks;
 	So the decision to leave them alone was right, and the contract is not
 	over-specified: it was `qui` that was under-capable.
 
+	## Why the native calls are behind a define
+
+	`wui_node_*` lives in the generated `WuiNodes.cpp`, on the WinUI side of the
+	build. A binary that links this library without that project — a test, a tool
+	— has nothing to call, and a direct extern would fail to link. The generator
+	sets `wui_winui`; without it the sink compiles to no-ops, which is exactly
+	what a test driving a recording sink needs. The library stays linkable on its
+	own, which is what its documentation claimed before it was true.
+
 	## Granularity
 
 	`bindReactive` is the one hook. Left at its default a property is applied
@@ -54,7 +63,7 @@ import wui.bridge.Callbacks;
 	sink.bindReactive = fn -> new rui.Signal.Effect(fn);
 	```
 **/
-#if cpp
+#if (cpp && wui_winui)
 // Declared, not included: these live in the generated WuiNodes.cpp, on the
 // WinUI side of the build. This library must keep compiling without it -- a
 // test binary links the sink and simply has no controls to talk to.
@@ -185,7 +194,7 @@ class WinUISink implements NodeSink<Int> {
 	// ---- the crossing itself ----
 
 	static function nativeCreate(type:String, parent:Int):Int {
-		#if cpp
+		#if (cpp && wui_winui)
 		var handle:Int = 0;
 		untyped __cpp__("{0} = wui_node_create({1}.utf8_str(), {2})", handle, type, parent);
 		return handle;
@@ -195,57 +204,57 @@ class WinUISink implements NodeSink<Int> {
 	}
 
 	static function nativePropString(h:Int, type:String, key:String, value:String):Void {
-		#if cpp
+		#if (cpp && wui_winui)
 		untyped __cpp__("wui_node_prop_string({0}, {1}.utf8_str(), {2}.utf8_str(), {3}.utf8_str())",
 			h, type, key, value);
 		#end
 	}
 
 	static function nativePropInt(h:Int, type:String, key:String, value:Int):Void {
-		#if cpp
+		#if (cpp && wui_winui)
 		untyped __cpp__("wui_node_prop_int({0}, {1}.utf8_str(), {2}.utf8_str(), {3})", h, type, key, value);
 		#end
 	}
 
 	static function nativePropFloat(h:Int, type:String, key:String, value:Float):Void {
-		#if cpp
+		#if (cpp && wui_winui)
 		untyped __cpp__("wui_node_prop_float({0}, {1}.utf8_str(), {2}.utf8_str(), {3})", h, type, key, value);
 		#end
 	}
 
 	static function nativePropBool(h:Int, type:String, key:String, value:Bool):Void {
-		#if cpp
+		#if (cpp && wui_winui)
 		untyped __cpp__("wui_node_prop_bool({0}, {1}.utf8_str(), {2}.utf8_str(), {3})", h, type, key, value);
 		#end
 	}
 
 	static function nativePropCallback(h:Int, type:String, key:String, id:Int):Void {
-		#if cpp
+		#if (cpp && wui_winui)
 		untyped __cpp__("wui_node_prop_callback({0}, {1}.utf8_str(), {2}.utf8_str(), {3})", h, type, key, id);
 		#end
 	}
 
 	static function nativeModifier(h:Int, type:String, modType:String, f0:Float, s0:String):Void {
-		#if cpp
+		#if (cpp && wui_winui)
 		untyped __cpp__("wui_node_modifier({0}, {1}.utf8_str(), {2}.utf8_str(), {3}, {4}.utf8_str())",
 			h, type, modType, f0, s0);
 		#end
 	}
 
 	static function nativeInsert(parent:Int, child:Int, index:Int):Void {
-		#if cpp
+		#if (cpp && wui_winui)
 		untyped __cpp__("wui_node_insert({0}, {1}, {2})", parent, child, index);
 		#end
 	}
 
 	static function nativeRemove(parent:Int, child:Int):Void {
-		#if cpp
+		#if (cpp && wui_winui)
 		untyped __cpp__("wui_node_remove({0}, {1})", parent, child);
 		#end
 	}
 
 	static function nativeDestroy(h:Int):Void {
-		#if cpp
+		#if (cpp && wui_winui)
 		untyped __cpp__("wui_node_destroy({0})", h);
 		#end
 	}

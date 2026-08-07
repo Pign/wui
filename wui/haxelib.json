@@ -15,7 +15,8 @@
     "main": "tools.cli.CLI",
     "dependencies": {
         "hxcpp": "",
-        "rui": ""
+        "rui": "",
+        "nui": ""
     },
     "contributors": []
 }

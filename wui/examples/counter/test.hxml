@@ -6,5 +6,6 @@
 -cp test
 -cp ../../src
 -lib rui
+-lib nui
 -main CallbackOrder
 -cpp build/test

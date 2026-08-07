@@ -47,6 +47,11 @@ class WinUIGenerator {
         // point where the mistake was made. `sui` forces its bridge the same way.
         Context.getModule("wui.bridge.HaxeBridge");
 
+        // Say that a WinUI project is being generated, so the node sink emits its
+        // native calls. Without this the sink compiles to no-ops and the library
+        // links on its own -- a test binary has no WuiNodes.cpp to call into.
+        Compiler.define("wui_winui");
+
         // Collect types after typing phase
         Context.onAfterTyping(function(types:Array<haxe.macro.Type.ModuleType>) {
             // Judge the node trees written in this build before anything else:

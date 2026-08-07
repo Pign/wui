@@ -2,17 +2,19 @@ package wui.ui;
 
 import wui.View;
 
-/**
- * Text input field. Maps to WinUI TextBox.
- *
- * Usage:
- *   new TextBox("Enter name...")
- *       .width(200)
- */
+/** A single-line text field. **/
+@:node("TextBox")
+@:build(wui.macros.ControlBuilder.build())
 class TextBox extends View {
-    public function new(?placeholder:String, ?binding:Dynamic) {
-        super("TextBox");
-        if (placeholder != null) properties.set("placeholder", placeholder);
-        if (binding != null) properties.set("binding", binding);
-    }
+	@:winrt("Text")
+	public var text:Null<String>;
+
+	@:winrt("PlaceholderText")
+	public var placeholder:Null<String>;
+
+	public function new(?placeholder:String, ?binding:Dynamic) {
+		super("TextBox");
+		if (placeholder != null) this.placeholder = placeholder;
+		if (binding != null) properties.set("binding", binding);
+	}
 }

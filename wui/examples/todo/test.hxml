@@ -4,5 +4,6 @@
 -cp test
 -cp ../../src
 -lib rui
+-lib nui
 -main TodoCheck
 -cpp build/test
