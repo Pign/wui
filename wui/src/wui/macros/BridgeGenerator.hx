@@ -81,6 +81,15 @@ namespace {
     // into a reported no-op instead of a wrong widget being poked.
     std::vector<winrt_xaml::UIElement> g_nodes;
 
+    // One Click subscription per node, so applying onClick again REPLACES it.
+    //
+    // WinUI events accumulate: Click(handler) adds a subscriber, it does not
+    // set one. A re-render hands fresh closures every time -- comparing them by
+    // reference can never call them equal -- so without revoking first, every
+    // render leaves another live handler behind and one click fires n+1 times.
+    // "Apply this property" has to mean apply, not append.
+    std::vector<winrt::event_token> g_clickTokens;
+
     winrt_xaml::UIElement at(int h) {
         if (h < 0 || h >= (int)g_nodes.size()) return nullptr;
         return g_nodes[h];
@@ -88,6 +97,7 @@ namespace {
 
     int put(winrt_xaml::UIElement const& e) {
         g_nodes.push_back(e);
+        g_clickTokens.push_back(winrt::event_token{});
         return (int)g_nodes.size() - 1;
     }
 }
@@ -95,7 +105,9 @@ namespace {
 namespace wui { namespace nodes {
     void reset(winrt_xaml::UIElement const& root) {
         g_nodes.clear();
+        g_clickTokens.clear();
         g_nodes.push_back(root);   // handle 0
+        g_clickTokens.push_back(winrt::event_token{});
     }
 
     winrt_xaml::UIElement rootElement() {
@@ -195,8 +207,13 @@ extern "C" void wui_node_prop_callback(int h, const char* type, const char* key,
 
     if (k == "onClick") {
         if (auto b = e.try_as<winrt_controls::Button>()) {
-            b.Click([callbackId](winrt::Windows::Foundation::IInspectable const&,
-                                 winrt_xaml::RoutedEventArgs const&) {
+            // Revoke the previous subscription before adding the new one.
+            if (g_clickTokens[h].value != 0) {
+                b.Click(g_clickTokens[h]);
+                g_clickTokens[h] = winrt::event_token{};
+            }
+            g_clickTokens[h] = b.Click([callbackId](winrt::Windows::Foundation::IInspectable const&,
+                                                   winrt_xaml::RoutedEventArgs const&) {
                 wui_bridge_invoke_node(callbackId);
             });
             return;
@@ -257,6 +274,7 @@ extern "C" void wui_node_remove(int parent, int child) {
 
 extern "C" void wui_node_destroy(int h) {
     if (h <= 0 || h >= (int)g_nodes.size()) return;
+    g_clickTokens[h] = winrt::event_token{};
     // A real release, not a hide. Dropping the last reference is what frees a
     // WinRT control, so clearing the slot destroys it -- unlike Silica, where
     // destroy can only set visible = false and the item leaks.

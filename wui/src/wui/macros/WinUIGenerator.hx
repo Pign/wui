@@ -49,6 +49,11 @@ class WinUIGenerator {
 
         // Collect types after typing phase
         Context.onAfterTyping(function(types:Array<haxe.macro.Type.ModuleType>) {
+            // Judge the node trees written in this build before anything else:
+            // an unknown type or a mistyped property is a source mistake, and
+            // rendering `?TypeName` for it would only postpone the discovery.
+            NodeValidator.check(types);
+
             for (mt in types) {
                 switch (mt) {
                     case TClassDecl(ref):

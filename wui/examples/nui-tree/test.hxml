@@ -1,0 +1,9 @@
+# The reconciler against a recording sink: no window, no WinUI, just the
+# operations it emits. What matters here is what it does NOT emit.
+-cp src
+-cp test
+-cp ../../src
+-lib rui
+-lib nui
+-main ReconcileCheck
+-cpp build/test

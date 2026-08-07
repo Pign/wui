@@ -454,10 +454,38 @@ class HaxeBridge {
 			return;
 		}
 
-		var sink = new wui.nui.WinUISink();
-		wui.nui.Mount.tree(sink, node, 0);
+		nuiSink = new wui.nui.WinUISink();
+		nuiReconciler = new wui.nui.Reconciler(nuiSink);
+		nuiTree = nuiReconciler.reconcile(null, node, 0);
 		trace('[wui] nui: arbre monté, ${Callbacks.nodeCount()} gestionnaire(s)');
 	}
+
+	/**
+		Re-render the node tree, applying only what changed.
+
+		This is the whole point of the push contract: the app asks for a fresh
+		tree, and the controls that did not change are never touched — so a text
+		box keeps its text, its caret and its selection while the list around it
+		is reordered.
+	**/
+	public static function rerenderNui():Void {
+		if (nuiReconciler == null || appInstance == null) {
+			trace("[wui] rerenderNui: nothing mounted yet");
+			return;
+		}
+
+		var node:nui.Node = appInstance.nuiBody();
+		if (node == null) {
+			trace("[wui] rerenderNui: nuiBody() returned null");
+			return;
+		}
+
+		nuiTree = nuiReconciler.reconcile(nuiTree, node, 0);
+	}
+
+	static var nuiSink:wui.nui.WinUISink = null;
+	static var nuiReconciler:wui.nui.Reconciler<Int> = null;
+	static var nuiTree:wui.nui.Mounted<Int> = null;
 
 	/** Hand one integer to the generated C++, which owns `s_<name>`. **/
 	static function pushInt(name:String, value:Int):Void {

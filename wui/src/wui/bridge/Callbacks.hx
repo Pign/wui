@@ -126,6 +126,22 @@ class Callbacks {
 		nodeHandlers = [];
 	}
 
+	/**
+		Overwrite the handler at `id`.
+
+		Node ids are allocated once per (node, property) and then reused: a
+		re-render hands fresh closures, and allocating a new id for each would
+		grow this table for as long as the app runs. The control keeps pointing at
+		the same id; only what the id means changes.
+	**/
+	public static function setNode(id:Int, fn:Void->Void):Void {
+		if (id < 0 || id >= nodeHandlers.length) {
+			trace('[wui] setNode: id $id out of range');
+			return;
+		}
+		nodeHandlers[id] = fn;
+	}
+
 	/** Run a node property handler. **/
 	public static function invokeNode(id:Int):Void {
 		if (id < 0 || id >= nodeHandlers.length) {

@@ -85,6 +85,16 @@ class WinUISink implements NodeSink<Int> {
 		return v;
 	}
 
+	/**
+		Which id carries the handler for a given (node, property).
+
+		Allocated once and reused. A re-render hands a fresh closure for the same
+		button every time — they can never compare equal, so the property is
+		always re-applied — and minting an id per application would grow the
+		registry for the life of the app.
+	**/
+	final callbackIds = new Map<String, Int>();
+
 	public function new() {}
 
 	/**
@@ -125,7 +135,15 @@ class WinUISink implements NodeSink<Int> {
 					// An id crosses, never the closure: a closure held only by
 					// native code is invisible to the hxcpp GC, which is the wall
 					// both sibling backends hit before this one.
-					nativePropCallback(target, type, key, Callbacks.registerNode(fn));
+					var slot = target + ":" + key;
+					if (callbackIds.exists(slot)) {
+						// Same id, new meaning. The control does not need telling.
+						Callbacks.setNode(callbackIds.get(slot), fn);
+					} else {
+						var id = Callbacks.registerNode(fn);
+						callbackIds.set(slot, id);
+						nativePropCallback(target, type, key, id);
+					}
 
 				case PCallbackString(_) | PCallbackFloat(_) | PCallbackInt(_):
 					// These need the control to hand its live value back. The
