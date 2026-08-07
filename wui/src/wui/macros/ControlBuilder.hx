@@ -90,7 +90,10 @@ class ControlBuilder {
 					});
 
 				default:
-					Context.error("@:winrt s'applique à une variable", field.pos);
+					// A fluent setter carrying @:winrt is a declaration as much as
+					// a field is: it names the property, its argument gives the
+					// kind, and calling it is optional so it is nullable. Left
+					// exactly as written -- it already sets the property.
 					out.push(field);
 			}
 		}

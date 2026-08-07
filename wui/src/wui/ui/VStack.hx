@@ -11,10 +11,10 @@ import wui.View;
  *       new Text("Bottom")
  *   ]).spacing(8)
  */
-class VStack extends View {
+class VStack extends Stack {
     public function new(children:Array<View>, ?spacing:Float) {
         super("StackPanel", children);
         properties.set("orientation", "Vertical");
-        if (spacing != null) properties.set("spacing", spacing);
+        if (spacing != null) this.spacing(spacing);
     }
 }

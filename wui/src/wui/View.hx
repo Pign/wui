@@ -57,11 +57,6 @@ class View {
         return this;
     }
 
-    public function spacing(s:Float):View {
-        modifierChain.push(Spacing(s));
-        return this;
-    }
-
     // --- Typography Modifiers ---
 
     public function font(style:FontStyle):View {
