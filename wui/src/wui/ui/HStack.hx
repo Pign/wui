@@ -16,6 +16,6 @@ class HStack extends Stack {
     public function new(children:Array<View>, ?spacing:Float) {
         super("StackPanel", children);
         properties.set("orientation", "Horizontal");
-        if (spacing != null) this.spacing(spacing);
+        if (spacing != null) this.spacing = spacing;
     }
 }

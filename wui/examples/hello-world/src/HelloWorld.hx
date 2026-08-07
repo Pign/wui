@@ -32,7 +32,7 @@ class HelloWorld extends wui.App {
             new HStack([
                 new Button("Learn More"),
                 new Button("Get Started")
-            ]).spacing(8),
+            ], 8),
             new Spacer()
         ]).horizontalAlignment(Center);
     }

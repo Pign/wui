@@ -9,12 +9,12 @@ import wui.View;
  *   new VStack([
  *       new Text("Top"),
  *       new Text("Bottom")
- *   ]).spacing(8)
+ *   ], 8)
  */
 class VStack extends Stack {
     public function new(children:Array<View>, ?spacing:Float) {
         super("StackPanel", children);
         properties.set("orientation", "Vertical");
-        if (spacing != null) this.spacing(spacing);
+        if (spacing != null) this.spacing = spacing;
     }
 }

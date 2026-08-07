@@ -37,7 +37,7 @@ class Counter extends wui.App {
                     .padding(),
                 new Button("+", null, count.inc(1))
                     .padding()
-            ]).spacing(8),
+            ], 8),
             // Trois closures Haxe, après trois boutons StateAction : si la
             // numérotation de la macro et celle de l'exécution divergeaient, un
             // clic exécuterait la *mauvaise* closure plutôt que rien du tout —
@@ -46,7 +46,7 @@ class Counter extends wui.App {
                 new Button("Haxe A").onClick(() -> report("A")).padding(),
                 new Button("Haxe B").onClick(() -> report("B")).padding(),
                 new Button("Haxe C").onClick(() -> report("C")).padding()
-            ]).spacing(8),
+            ], 8),
             // W3 : l'écriture part de Haxe et l'affichage doit suivre.
             //
             // `count` vit ici, dans l'instance construite au démarrage ; le C++

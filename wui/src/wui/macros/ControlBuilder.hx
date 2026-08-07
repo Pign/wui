@@ -90,10 +90,10 @@ class ControlBuilder {
 					});
 
 				default:
-					// A fluent setter carrying @:winrt is a declaration as much as
-					// a field is: it names the property, its argument gives the
-					// kind, and calling it is optional so it is nullable. Left
-					// exactly as written -- it already sets the property.
+					// One shape per concept: a property is a var, a modifier is a
+					// fluent method. Allowing both here meant the vocabulary had to
+					// read declarations two ways.
+					Context.error("@:winrt déclare une propriété : il s'applique à une var, pas à une méthode", field.pos);
 					out.push(field);
 			}
 		}

@@ -142,18 +142,6 @@ class WinUIGenerator {
         Sys.println('[wui] C++/WinRT project generated at: $winuiDir');
     }
 
-    /** Does this call target a method a control declared with `@:winrt`? **/
-    static function isDeclaredProperty(func:TypedExpr):Bool {
-        return switch (func.expr) {
-            case TField(_, fa): switch (fa) {
-                    case FInstance(_, _, cf): cf.get().meta.has(":winrt");
-                    case FClosure(_, cf): cf.get().meta.has(":winrt");
-                    case _: false;
-                }
-            case _: false;
-        };
-    }
-
     /** Is this argument a literal `null`, as in `new Button("x", null, action)`? **/
     static function isNullLiteral(expr:TypedExpr):Bool {
         if (expr == null) return true;
@@ -586,19 +574,6 @@ class WinUIGenerator {
                 // and does not match the depth-first walk the runtime does.
                 if (fieldName == "onClick" && args.length > 0) {
                     baseNode.properties.set("hasHaxeCallback", true);
-                }
-
-                // A fluent setter carrying @:winrt declares a *property*, not a
-                // modifier. Reading the annotation is the same derivation the
-                // vocabulary does -- so `.spacing(8)` and `new VStack(c, 8)` stop
-                // being two mechanisms for one thing.
-                if (isDeclaredProperty(func) && args.length > 0) {
-                    var v = extractFloatValue(args[0]);
-                    if (v == null) v = extractStringOrExpr(args[0]);
-                    if (v != null) {
-                        baseNode.properties.set(fieldName, v);
-                        return baseNode;
-                    }
                 }
 
                 var modifier = extractModifier(fieldName, args);
