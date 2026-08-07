@@ -120,7 +120,16 @@ class BridgeGenerator {
             for (entry in wui.nui.Vocabulary.defaultsFor(type)) {
                 var literal = entry.kind == "KString" ? "\"" + entry.value + "\"" : entry.value;
                 var call = nodeSetter(entry.winrt, entry.kind, literal, literal);
-                if (call != null) src.add("        c." + call + ";\n");
+                if (call == null) continue;
+
+                var owners = memberOwners(entry.winrt);
+                if (owners == null || owners.length == 0) {
+                    src.add("        c." + call + ";\n");
+                } else {
+                    for (owner in owners) {
+                        src.add("        if (auto o = c.try_as<" + owner + ">()) { o." + call + "; }\n");
+                    }
+                }
             }
             src.add("        return put(c);\n    }\n");
         }
@@ -155,8 +164,17 @@ class BridgeGenerator {
                     var call = nodeSetter(entry.winrt, kind, "text", "value");
                     if (call == null) continue;
 
+                    var owners = memberOwners(entry.winrt);
                     src.add("    if (t == \"" + type + "\" && k == \"" + entry.name + "\") {\n");
-                    src.add("        if (auto c = e.try_as<winrt_controls::" + winui + ">()) { c." + call + "; }\n");
+                    if (owners == null) {
+                        src.add("        if (auto c = e.try_as<winrt_controls::" + winui + ">()) { c." + call + "; }\n");
+                    } else if (owners.length == 0) {
+                        src.add("        e." + call + ";\n");
+                    } else {
+                        for (owner in owners) {
+                            src.add("        if (auto c = e.try_as<" + owner + ">()) { c." + call + "; return; }\n");
+                        }
+                    }
                     src.add("        return;\n    }\n");
                 }
             }
@@ -211,10 +229,37 @@ class BridgeGenerator {
     }
 
     /**
+        Which WinRT type actually declares a member.
+
+        A node type is not enough. `IsEnabled` belongs to `Control`, `Foreground`
+        to `Control` and to `TextBlock` separately, `Visibility` to `UIElement` --
+        so emitting a property against the node's own control fails to compile
+        the moment that control does not happen to have it. MSVC found this the
+        first time the generated file was built.
+
+        `null` means the member is on `UIElement`, so the handle can be used as
+        it is. Otherwise the emitted code casts, and skips when the cast fails --
+        a `StackPanel` simply has no foreground.
+    **/
+    public static function memberOwners(member:String):Array<String> {
+        return switch (member) {
+            case "Visibility" | "Opacity": [];
+            case "Width" | "Height" | "Margin" | "HorizontalAlignment" | "VerticalAlignment":
+                ["winrt_xaml::FrameworkElement"];
+            case "IsEnabled" | "Background" | "BorderBrush" | "BorderThickness" | "CornerRadius":
+                ["winrt_controls::Control"];
+            // Declared separately on both, and TextBlock is not a Control.
+            case "Padding" | "Foreground" | "FontSize":
+                ["winrt_controls::Control", "winrt_controls::TextBlock"];
+            case _: null;   // the control own member: cast to the control itself
+        };
+    }
+
+    /**
         The WinRT call for one property, or `null` when the node path cannot make
         it yet -- reported by its absence rather than emitted wrong.
     **/
-    static function nodeSetter(member:String, kind:String, textExpr:String, valueExpr:String):Null<String> {
+    public static function nodeSetter(member:String, kind:String, textExpr:String, valueExpr:String):Null<String> {
         return switch (member) {
             case "Foreground" | "Background" | "BorderBrush":
                 member + "(wui::runtime::brushFromName(" + valueExpr + "))";
@@ -224,6 +269,12 @@ class BridgeGenerator {
                 member + "(winrt::box_value(" + textExpr + "))";
             case "Visibility":
                 member + "(" + valueExpr + " ? winrt_xaml::Visibility::Visible : winrt_xaml::Visibility::Collapsed)";
+
+            // These take a struct, not a number -- one value, four sides.
+            case "Padding" | "Margin" | "BorderThickness":
+                member + "(wui::runtime::uniformThickness(" + valueExpr + "))";
+            case "CornerRadius":
+                member + "(wui::runtime::uniformCornerRadius(" + valueExpr + "))";
             case "HorizontalAlignment" | "VerticalAlignment" | "Style" | "FontWeight" | "FontStyle":
                 null;
             case _:

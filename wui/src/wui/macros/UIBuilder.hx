@@ -743,13 +743,27 @@ $refreshLists
                 kind = shared.kind;
             }
 
-            var value = node.properties.get(key);
-            var expr = switch (kind) {
-                case "KString": stringPropExpr(varName, member, Std.string(value));
-                case "KBool": '$varName.$member(' + (value == true ? "true" : "false") + ');';
-                case _: '$varName.$member($value);';
-            };
-            if (expr != null) lines.push(expr);
+            var raw = node.properties.get(key);
+            var value = kind == "KString" ? "\"" + Std.string(raw) + "\"" : Std.string(raw);
+            var text = kind == "KString" ? "winrt::hstring(L\"" + Std.string(raw) + "\")" : value;
+
+            // The same emitter the node runtime uses. It knows which WinRT type
+            // declares a member and which ones do not take a plain value -- and
+            // for a few hours each generator had its own idea of that, which is
+            // the duplication this whole sequence exists to remove.
+            var call = BridgeGenerator.nodeSetter(member, kind, text, value);
+            if (call == null) continue;
+
+            var owners = BridgeGenerator.memberOwners(member);
+            if (owners == null) {
+                lines.push('$varName.$call;');
+            } else if (owners.length == 0) {
+                lines.push('$varName.$call;');
+            } else {
+                for (owner in owners) {
+                    lines.push('if (auto o = $varName.try_as<$owner>()) { o.$call; }');
+                }
+            }
         }
     }
 
