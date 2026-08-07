@@ -2,8 +2,28 @@ package wui.nui;
 
 import nui.PropValue;
 
+/**
+	What kind of value a property holds.
+
+	The markup needs this. `qui`'s existing `jsx()` guesses from the attribute
+	name — a hardcoded list where `text`/`title`/`label` are strings and
+	`spacing` is an int — and has to special-case `value` by tag, because
+	`<Slider value=…>` is a number and `<ComboBox value=…>` is a string. A schema
+	knows, per node type, so nothing has to be guessed.
+**/
+enum PropKind {
+	KString;
+	KInt;
+	KFloat;
+	KBool;
+	KCallback;
+}
+
 /** What one property of a node type may hold. **/
 typedef PropSpec = {
+	/** What `{expr}` becomes: `PString`, `PInt`, `PCallback`… **/
+	var kind:PropKind;
+
 	/** Absent is an error; the macro refuses to compile a node without it. **/
 	var required:Bool;
 
@@ -20,6 +40,22 @@ typedef PropSpec = {
 
 /**
 	What `wui` can render, and with which properties.
+
+	## Why "vocabulary" and not "schema"
+
+	A schema is a document you declare. That describes this file, which lists
+	types and their properties by hand — but it does **not** describe what the
+	other backends will do. `qui`'s node types *are existing Haxe classes*
+	(`ui.Slider` with `public var value(default, set):Float`), so its vocabulary
+	is **read from the types**, exhaustive by construction and unable to drift.
+	Its types are classes; `wui`'s are strings the C++ knows how to build, with
+	no class behind them.
+
+	Nothing is shared between those two artefacts. What is shared is the
+	**question `mui` asks**: do you know this type, which attributes does it take,
+	of what kind, which are required. The name says what is described and stays
+	silent on how it is obtained. `wui` has to declare because its vocabulary
+	lives in C++, where nothing can be read back.
 
 	## Why this lives here and not in `nui`
 
@@ -47,7 +83,7 @@ typedef PropSpec = {
 	shape then a common core becomes an observation rather than a bet. Same
 	discipline B4 taught — do not generalise from one sample.
 **/
-class Schema {
+class Vocabulary {
 	/**
 		Node types `wui` knows how to build, with their properties.
 
@@ -57,30 +93,30 @@ class Schema {
 	**/
 	public static final types:Map<String, Map<String, PropSpec>> = [
 		"VStack" => [
-			"spacing" => {required: false, whenAbsent: PFloat(0)}
+			"spacing" => {kind: KFloat, required: false, whenAbsent: PFloat(0)}
 		],
 		"HStack" => [
-			"spacing" => {required: false, whenAbsent: PFloat(0)}
+			"spacing" => {kind: KFloat, required: false, whenAbsent: PFloat(0)}
 		],
 		"Text" => [
-			"text" => {required: true}
+			"text" => {kind: KString, required: true}
 		],
 		"Button" => [
-			"text" => {required: true},
-			"onClick" => {required: false}
+			"text" => {kind: KString, required: true},
+			"onClick" => {kind: KCallback, required: false}
 		],
 		"TextBox" => [
-			"text" => {required: false, whenAbsent: PString("")},
-			"placeholder" => {required: false, whenAbsent: PString("")}
+			"text" => {kind: KString, required: false, whenAbsent: PString("")},
+			"placeholder" => {kind: KString, required: false, whenAbsent: PString("")}
 		]
 	];
 
 	/** Properties every type accepts, so each entry above need not repeat them. **/
 	public static final universal:Map<String, PropSpec> = [
-		"width" => {required: false},
-		"height" => {required: false},
-		"visible" => {required: false, whenAbsent: PBool(true)},
-		"enabled" => {required: false, whenAbsent: PBool(true)}
+		"width" => {kind: KFloat, required: false},
+		"height" => {kind: KFloat, required: false},
+		"visible" => {kind: KBool, required: false, whenAbsent: PBool(true)},
+		"enabled" => {kind: KBool, required: false, whenAbsent: PBool(true)}
 	];
 
 	public static function knows(type:String):Bool {
@@ -109,6 +145,12 @@ class Schema {
 			for (k in own.keys()) if (own.get(k).required) out.push(k);
 		}
 		return out;
+	}
+
+	/** What kind of value `key` holds on `type`, or `null` if it has no such property. **/
+	public static function kindOf(type:String, key:String):Null<PropKind> {
+		var s = spec(type, key);
+		return s == null ? null : s.kind;
 	}
 
 	/**

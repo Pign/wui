@@ -3,7 +3,7 @@ package wui.macros;
 #if macro
 import haxe.macro.Context;
 import haxe.macro.Type;
-import wui.nui.Schema;
+import wui.nui.Vocabulary;
 
 using haxe.macro.Tools;
 #end
@@ -85,7 +85,7 @@ class NodeValidator {
 				var c = ref.get();
 				if (c.name == "Node" && c.pack.join(".") == "nui" && args.length > 0) {
 					var type = literalString(args[0]);
-					if (type != null && !Schema.knows(type)) {
+					if (type != null && !Vocabulary.knows(type)) {
 						Context.error('wui ne sait pas construire un noeud "$type".\n'
 							+ '  Types connus : ${sortedTypes().join(", ")}.\n'
 							+ '  Si le type vient de l\'exterieur, utilisez wui.nui.Foreign.node("$type").',
@@ -127,7 +127,7 @@ class NodeValidator {
 					if (c.name != "Node" || c.pack.join(".") != "nui") return null;
 					if (args.length == 0) return null;
 					var type = literalString(args[0]);
-					if (type == null || !Schema.knows(type)) return null;
+					if (type == null || !Vocabulary.knows(type)) return null;
 					keys.reverse();
 					return {type: type, keys: keys};
 
@@ -141,7 +141,7 @@ class NodeValidator {
 	}
 
 	static function checkChain(chain:{type:String, keys:Array<{name:String, pos:haxe.macro.Expr.Position}>}, e:TypedExpr):Void {
-		var allowed = Schema.keysOf(chain.type);
+		var allowed = Vocabulary.keysOf(chain.type);
 		var seen = new Map<String, Bool>();
 
 		for (k in chain.keys) {
@@ -153,7 +153,7 @@ class NodeValidator {
 			}
 		}
 
-		for (req in Schema.requiredOf(chain.type)) {
+		for (req in Vocabulary.requiredOf(chain.type)) {
 			if (!seen.exists(req)) {
 				Context.error('"${chain.type}" exige la propriete "$req", absente ici.', e.pos);
 			}
@@ -189,7 +189,7 @@ class NodeValidator {
 	}
 
 	static function sortedTypes():Array<String> {
-		var out = [for (t in Schema.types.keys()) t];
+		var out = [for (t in Vocabulary.types.keys()) t];
 		out.sort(function(a, b) return a < b ? -1 : (a > b ? 1 : 0));
 		return out;
 	}
