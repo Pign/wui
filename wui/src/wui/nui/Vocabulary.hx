@@ -10,6 +10,10 @@ using haxe.macro.Tools;
 /**
 	What `wui` can render, read from the controls themselves.
 
+	Everything is derived, including the properties every element has: `View`
+	declares `width`, `height`, `visible` and `enabled` as vars, so the
+	hand-written `UNIVERSAL` table that used to sit here is gone.
+
 	## Two readers, one source
 
 	The knowledge has two audiences, and trying to serve both with one generated
@@ -49,10 +53,6 @@ class Vocabulary {
 	#if macro
 	static inline var CONTROLS = "wui/ui";
 
-	/** Universal properties, still declared here — see the note at the bottom. **/
-	static final UNIVERSAL = ["width" => "KFloat", "height" => "KFloat",
-		"visible" => "KBool", "enabled" => "KBool"];
-
 	static var cache:Map<String, Map<String, String>> = null;
 
 	/** Does `wui` know how to build this node type? **/
@@ -63,9 +63,7 @@ class Vocabulary {
 	/** Every property this type accepts. **/
 	public static function keysOf(type:String):Array<String> {
 		var own = all().get(type);
-		var out = [for (k in UNIVERSAL.keys()) k];
-		if (own != null) for (k in own.keys()) out.push(k);
-		return out;
+		return own == null ? [] : [for (k in own.keys()) k];
 	}
 
 	/** Properties this type requires: not nullable, and with no declared default. **/
@@ -83,8 +81,7 @@ class Vocabulary {
 	/** Which `PropValue` constructor a property takes, by name. `null` if unknown. **/
 	public static function kindOf(type:String, key:String):Null<String> {
 		var own = all().get(type);
-		if (own != null && own.exists(key)) return own.get(key);
-		return UNIVERSAL.exists(key) ? UNIVERSAL.get(key) : null;
+		return (own != null && own.exists(key)) ? own.get(key) : null;
 	}
 
 	/** Every known type, sorted, for an error message that helps. **/
