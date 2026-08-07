@@ -23,10 +23,9 @@ package wui;
 	that is, in WinUI, just properties — `Padding` and `Margin` are setters like
 	any other.
 
-	The style methods below still route through that macro-side extraction, so
-	they stay for now. Finishing the job needs a way to say *this method sets
-	that declared property*, and 19 `.padding()` call sites to move; doing it
-	half-way would put back the ambiguity that was just removed.
+	They are all vars now, declared on the class whose WinRT type actually has
+	them -- which is what lets the generator emit against the concrete control
+	and let MSVC check membership.
 **/
 @:build(wui.macros.ControlBuilder.build())
 class View {
@@ -34,43 +33,29 @@ class View {
     public var children:Array<View>;
     public var properties:Map<String, Dynamic>;
 
-    @:winrt("Width") public var width:Null<Float>;
-    @:winrt("Height") public var height:Null<Float>;
-    @:winrt("Visibility") public var visible:Bool = true;
-    @:winrt("IsEnabled") public var enabled:Bool = true;
-
     public function new(?viewType:String, ?children:Array<View>) {
         this.viewType = viewType != null ? viewType : "View";
         this.children = children != null ? children : [];
         this.properties = new Map();
     }
 
-    // --- Every property, declared ---
+    // --- What every element really has ---
     //
-    // These were fluent methods pushing onto a chain that nothing read at
-    // runtime, and that the generator reconstructed from the typed AST. They
-    // are vars now: the vocabulary derives them, the markup can check them, the
-    // generator emits them from the same declaration, and there is one shape
-    // per concept.
+    // These are `UIElement` and `FrameworkElement` members, so every control
+    // carries them. Anything narrower is declared on the class that has it:
+    // `IsEnabled` is a `Control` member and a StackPanel is not a Control, so
+    // putting it here would emit code MSVC rejects.
     //
-    // `@:winrt` carries the only thing a Haxe type cannot say -- that `padding`
-    // reaches WinUI as `Padding`.
+    // That is the point of dropping the owner table. It said which WinRT type
+    // declared each member -- a fourth hand-kept copy of the truth, and already
+    // wrong about Panel. Emitting against the concrete control instead lets the
+    // C++ compiler answer, and it knows.
 
-    @:winrt("Padding") public var padding:Null<Float>;
+    @:winrt("Width") public var width:Null<Float>;
+    @:winrt("Height") public var height:Null<Float>;
     @:winrt("Margin") public var margin:Null<Float>;
     @:winrt("Opacity") public var opacity:Float = 1;
-    @:winrt("CornerRadius") public var cornerRadius:Null<Float>;
-    @:winrt("BorderThickness") public var borderThickness:Null<Float>;
-
-    @:winrt("Style") public var font:Null<String>;
-    @:winrt("FontSize") public var fontSize:Null<Float>;
-
-    // Colours cross as names. An unknown one leaves the control its own rather
-    // than a guessed approximation -- the call `cui` made in B5.
-    @:winrt("Foreground") public var foregroundColor:Null<String>;
-    @:winrt("Background") public var background:Null<String>;
-    @:winrt("BorderBrush") public var borderBrush:Null<String>;
-
+    @:winrt("Visibility") public var visible:Bool = true;
     @:winrt("HorizontalAlignment") public var horizontalAlignment:Null<String>;
     @:winrt("VerticalAlignment") public var verticalAlignment:Null<String>;
 }

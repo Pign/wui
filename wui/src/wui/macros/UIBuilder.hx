@@ -754,16 +754,10 @@ $refreshLists
             var call = BridgeGenerator.nodeSetter(member, kind, text, value);
             if (call == null) continue;
 
-            var owners = BridgeGenerator.memberOwners(member);
-            if (owners == null) {
-                lines.push('$varName.$call;');
-            } else if (owners.length == 0) {
-                lines.push('$varName.$call;');
-            } else {
-                for (owner in owners) {
-                    lines.push('if (auto o = $varName.try_as<$owner>()) { o.$call; }');
-                }
-            }
+            // Straight onto the control. The declarations mirror the WinRT
+            // hierarchy now, so a property reaching a control that lacks it is a
+            // compile error rather than a setter quietly skipped.
+            lines.push('$varName.$call;');
         }
     }
 

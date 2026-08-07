@@ -26,6 +26,19 @@ class Text extends View {
 	@:winrt("Text")
 	public var text:String;
 
+	// TextBlock is a FrameworkElement, not a Control: these are its own members,
+	// which is why they are declared here rather than on a shared base.
+	@:winrt("Padding") public var padding:Null<Float>;
+	@:winrt("Foreground") public var foregroundColor:Null<String>;
+	@:winrt("FontSize") public var fontSize:Null<Float>;
+
+	// A typographic step, not a XAML Style. It used to map to `Style`, which the
+	// emitter could not produce, so `font = "Title"` compiled, validated, and did
+	// nothing -- the whole scale silently lost. It becomes a real FontSize now.
+	@:winrt("FontScale") public var font:Null<String>;
+
+	@:winrt("FontWeight") public var bold:Bool = false;
+
 	public function new(content:Dynamic) {
 		super("TextBlock");
 		this.text = Std.string(content);

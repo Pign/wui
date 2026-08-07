@@ -31,6 +31,15 @@ class Stack extends View {
 	@:winrt("Spacing")
 	public var spacing:Float = 0;
 
+	// StackPanel members. A Panel is not a Control, which is exactly what the
+	// owner table got wrong: it sent these to a `Control` cast that never
+	// succeeded, so they were skipped without a word.
+	@:winrt("Padding") public var padding:Null<Float>;
+	@:winrt("Background") public var background:Null<String>;
+	@:winrt("BorderBrush") public var borderBrush:Null<String>;
+	@:winrt("BorderThickness") public var borderThickness:Null<Float>;
+	@:winrt("CornerRadius") public var cornerRadius:Null<Float>;
+
 	public function new(?viewType:String, ?children:Array<View>) {
 		super(viewType, children);
 	}

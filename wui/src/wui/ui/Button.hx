@@ -13,7 +13,7 @@ import wui.state.StateAction;
 **/
 @:winuiType("Button")
 @:build(wui.macros.ControlBuilder.build())
-class Button extends View {
+class Button extends Control {
 	@:winrt("Content")
 	public var text:String;
 

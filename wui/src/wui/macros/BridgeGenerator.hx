@@ -122,14 +122,7 @@ class BridgeGenerator {
                 var call = nodeSetter(entry.winrt, entry.kind, literal, literal);
                 if (call == null) continue;
 
-                var owners = memberOwners(entry.winrt);
-                if (owners == null || owners.length == 0) {
-                    src.add("        c." + call + ";\n");
-                } else {
-                    for (owner in owners) {
-                        src.add("        if (auto o = c.try_as<" + owner + ">()) { o." + call + "; }\n");
-                    }
-                }
+                src.add("        c." + call + ";\n");
             }
             src.add("        return put(c);\n    }\n");
         }
@@ -164,17 +157,12 @@ class BridgeGenerator {
                     var call = nodeSetter(entry.winrt, kind, "text", "value");
                     if (call == null) continue;
 
-                    var owners = memberOwners(entry.winrt);
+                    // Emit against the concrete control and let MSVC check it has
+                    // the member. That is what replaced the owner table: a
+                    // hand-kept list of which WinRT type declares what, already
+                    // wrong about Panel, and failing in silence when it was.
                     src.add("    if (t == \"" + type + "\" && k == \"" + entry.name + "\") {\n");
-                    if (owners == null) {
-                        src.add("        if (auto c = e.try_as<winrt_controls::" + winui + ">()) { c." + call + "; }\n");
-                    } else if (owners.length == 0) {
-                        src.add("        e." + call + ";\n");
-                    } else {
-                        for (owner in owners) {
-                            src.add("        if (auto c = e.try_as<" + owner + ">()) { c." + call + "; return; }\n");
-                        }
-                    }
+                    src.add("        if (auto c = e.try_as<winrt_controls::" + winui + ">()) { c." + call + "; }\n");
                     src.add("        return;\n    }\n");
                 }
             }
@@ -229,30 +217,23 @@ class BridgeGenerator {
     }
 
     /**
-        Which WinRT type actually declares a member.
-
-        A node type is not enough. `IsEnabled` belongs to `Control`, `Foreground`
-        to `Control` and to `TextBlock` separately, `Visibility` to `UIElement` --
-        so emitting a property against the node's own control fails to compile
-        the moment that control does not happen to have it. MSVC found this the
-        first time the generated file was built.
-
-        `null` means the member is on `UIElement`, so the handle can be used as
-        it is. Otherwise the emitted code casts, and skips when the cast fails --
-        a `StackPanel` simply has no foreground.
+        A named typographic step, as a size. The table is the one the previous
+        hand-written translation used, kept rather than reinvented.
     **/
-    public static function memberOwners(member:String):Array<String> {
-        return switch (member) {
-            case "Visibility" | "Opacity": [];
-            case "Width" | "Height" | "Margin" | "HorizontalAlignment" | "VerticalAlignment":
-                ["winrt_xaml::FrameworkElement"];
-            case "IsEnabled" | "Background" | "BorderBrush" | "BorderThickness" | "CornerRadius":
-                ["winrt_controls::Control"];
-            // Declared separately on both, and TextBlock is not a Control.
-            case "Padding" | "Foreground" | "FontSize":
-                ["winrt_controls::Control", "winrt_controls::TextBlock"];
-            case _: null;   // the control own member: cast to the control itself
-        };
+    static function fontScale(valueExpr:String):String {
+        return "(" + valueExpr + " == std::string(\"Display\") ? 68 :"
+            + " " + valueExpr + " == std::string(\"TitleLarge\") ? 40 :"
+            + " " + valueExpr + " == std::string(\"Title\") ? 28 :"
+            + " " + valueExpr + " == std::string(\"Subtitle\") ? 20 :"
+            + " " + valueExpr + " == std::string(\"Caption\") ? 12 : 14)";
+    }
+
+    /** A name to its alignment enum, on the type that declares it. **/
+    static function alignmentExpr(member:String, valueExpr:String):String {
+        var e = "winrt_xaml::" + member;
+        return "(" + valueExpr + " == std::string(\"Center\") ? " + e + "::Center :"
+            + " " + valueExpr + " == std::string(\"Right\") ? " + e + "::Right :"
+            + " " + valueExpr + " == std::string(\"Left\") ? " + e + "::Left : " + e + "::Stretch)";
     }
 
     /**
@@ -275,8 +256,14 @@ class BridgeGenerator {
                 member + "(wui::runtime::uniformThickness(" + valueExpr + "))";
             case "CornerRadius":
                 member + "(wui::runtime::uniformCornerRadius(" + valueExpr + "))";
-            case "HorizontalAlignment" | "VerticalAlignment" | "Style" | "FontWeight" | "FontStyle":
-                null;
+            // The typographic scale the old hand-written translation carried.
+            // Emitting nothing for it is what lost the design.
+            case "FontScale":
+                "FontSize(" + fontScale(valueExpr) + ")";
+            case "FontWeight":
+                member + "(" + valueExpr + " ? winrt::Windows::UI::Text::FontWeights::SemiBold() : winrt::Windows::UI::Text::FontWeights::Normal())";
+            case "HorizontalAlignment" | "VerticalAlignment":
+                member + "(" + alignmentExpr(member, valueExpr) + ")";
             case _:
                 kind == "KString" ? member + "(" + textExpr + ")" : member + "(" + valueExpr + ")";
         };
