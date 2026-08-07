@@ -375,6 +375,16 @@ class WinUIGenerator {
                     var called = fieldNameOf(fa);
                     if (called != null && StringTools.startsWith(called, "set_") && args.length > 0) {
                         var key = called.substr(4);
+
+                        // `onClick` is a declared property now, so assigning it
+                        // arrives as `set_onClick` -- but what the generator needs
+                        // from it is the mark that this button carries a closure,
+                        // not a value it could emit.
+                        if (key == "onClick") {
+                            node.properties.set("hasHaxeCallback", true);
+                            continue;
+                        }
+
                         var v:Dynamic = extractFloatValue(args[0]);
                         if (v == null) v = extractStringOrExpr(args[0]);
                         if (v != null) node.properties.set(key, v);
