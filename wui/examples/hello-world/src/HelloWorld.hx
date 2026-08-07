@@ -22,18 +22,18 @@ class HelloWorld extends wui.App {
         return new VStack([
             new Spacer(),
             new Text("Hello from Haxe!")
-                .font(TitleLarge)
-                .foregroundColor(AccentColor)
-                .padding(),
+                .font = "TitleLarge"
+                .foregroundColor = "accent"
+                .padding = 12,
             new Text("Built with wui - native WinUI 3 apps in Haxe")
-                .font(Body)
-                .foregroundColor(Gray)
-                .padding(),
+                .font = "Body"
+                .foregroundColor = "gray"
+                .padding = 12,
             new HStack([
                 new Button("Learn More"),
                 new Button("Get Started")
             ], 8),
             new Spacer()
-        ]).horizontalAlignment(Center);
+        ]).horizontalAlignment = "Center";
     }
 }

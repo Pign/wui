@@ -16,7 +16,7 @@ class FormDemo extends wui.App {
     override function body():View {
         return new VStack([
             new Text("Settings")
-                .font(Title),
+                .font = "Title",
             new TextBox("Enter your name...", name),
             new Text("Hello, " + name)
         ]);

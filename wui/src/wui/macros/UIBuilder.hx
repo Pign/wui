@@ -375,6 +375,7 @@ $refreshLists
 
         // Apply modifiers
         applyModifiers(varName, "StackPanel", node.modifiers, lines);
+        applyDeclaredProps(varName, node.viewType, node, lines);
 
         // Generate children
         for (child in node.children) {
@@ -390,6 +391,8 @@ $refreshLists
         lines.push('winrt_controls::Grid $varName;');
 
         applyModifiers(varName, "Grid", node.modifiers, lines);
+
+        applyDeclaredProps(varName, node.viewType, node, lines);
 
         // For ZStack (overlapping), all children go in the same cell
         for (child in node.children) {
@@ -442,6 +445,8 @@ $refreshLists
 
         applyModifiers(varName, "TextBlock", node.modifiers, lines);
 
+        applyDeclaredProps(varName, node.viewType, node, lines);
+
         return varName;
     }
 
@@ -473,6 +478,8 @@ $refreshLists
 
         applyModifiers(varName, "Button", node.modifiers, lines);
 
+        applyDeclaredProps(varName, node.viewType, node, lines);
+
         return varName;
     }
 
@@ -494,6 +501,8 @@ $refreshLists
         }
 
         applyModifiers(varName, "ListView", node.modifiers, lines);
+
+        applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
     }
 
@@ -532,6 +541,8 @@ $refreshLists
         }
 
         applyModifiers(varName, "TextBox", node.modifiers, lines);
+
+        applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
     }
 
@@ -562,6 +573,8 @@ $refreshLists
         }
 
         applyModifiers(varName, "ToggleSwitch", node.modifiers, lines);
+
+        applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
     }
 
@@ -594,6 +607,8 @@ $refreshLists
         }
 
         applyModifiers(varName, "Slider", node.modifiers, lines);
+
+        applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
     }
 
@@ -612,6 +627,8 @@ $refreshLists
         }
 
         applyModifiers(varName, "Image", node.modifiers, lines);
+
+        applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
     }
 
@@ -625,6 +642,8 @@ $refreshLists
         }
 
         applyModifiers(varName, "ScrollViewer", node.modifiers, lines);
+
+        applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
     }
 
@@ -657,6 +676,8 @@ $refreshLists
         }
 
         applyModifiers(varName, "CheckBox", node.modifiers, lines);
+
+        applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
     }
 
@@ -674,6 +695,8 @@ $refreshLists
         }
 
         applyModifiers(varName, "ProgressRing", node.modifiers, lines);
+
+        applyDeclaredProps(varName, node.viewType, node, lines);
         return varName;
     }
 
@@ -701,6 +724,62 @@ $refreshLists
     }
 
     // ---- Modifier Application ----
+
+    /**
+     * Emit a WinRT setter for every declared property the node carries.
+     *
+     * The mapping comes from the control's own `@:winrt` metadata, so this
+     * switch does not exist: adding a property to a control is enough for the
+     * generator to apply it. What used to require a branch here, a branch in
+     * the node runtime and a line in a table now requires a declaration.
+     *
+     * A property with no declared WinRT member is skipped in silence only when
+     * the generator handles it itself (`text`, `label`, `spacing`…); anything
+     * else is reported, because a property that reaches nothing is exactly the
+     * failure this replaces.
+     */
+    static function applyDeclaredProps(varName:String, nodeType:String, node:ViewNode, lines:Array<String>):Void {
+        for (key in node.properties.keys()) {
+            if (HANDLED.indexOf(key) >= 0) continue;
+
+            var member = wui.nui.Vocabulary.winrtOf(nodeType, key);
+            var kind = wui.nui.Vocabulary.kindOf(nodeType, key);
+
+            // Fall back to View: the transpiled path names its types after WinUI
+            // while the vocabulary is keyed by the nui name, so a per-type lookup
+            // misses the properties every element shares.
+            if (member == null) {
+                var shared = wui.nui.Vocabulary.viewProp(key);
+                if (shared == null) continue;
+                member = shared.winrt;
+                kind = shared.kind;
+            }
+
+            var value = node.properties.get(key);
+            var expr = switch (kind) {
+                case "KString": stringPropExpr(varName, member, Std.string(value));
+                case "KBool": '$varName.$member(' + (value == true ? "true" : "false") + ');';
+                case _: '$varName.$member($value);';
+            };
+            if (expr != null) lines.push(expr);
+        }
+    }
+
+    /** Properties the per-control code already emits itself. **/
+    static final HANDLED = ["text", "label", "spacing", "orientation", "placeholder",
+        "binding", "action", "onClick", "hasHaxeCallback", "haxeCallbackId", "icon", "boundState"];
+
+    /** A few WinRT members take something other than a plain string. **/
+    static function stringPropExpr(varName:String, member:String, value:String):String {
+        return switch (member) {
+            case "Foreground" | "Background" | "BorderBrush":
+                '$varName.$member(wui::runtime::brushFromName("$value"));';
+            case "HorizontalAlignment" | "VerticalAlignment":
+                '$varName.$member(winrt_xaml::${member}::$value);';
+            case "Style": null;  // a TextBlock style needs a resource lookup; not yet
+            case _: '$varName.$member(L"$value");';
+        };
+    }
 
     static function applyModifiers(varName:String, controlType:String, modifiers:Array<ModifierData>, lines:Array<String>):Void {
         for (mod in modifiers) {

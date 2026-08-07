@@ -84,6 +84,55 @@ class Vocabulary {
 		return (own != null && own.exists(key)) ? own.get(key) : null;
 	}
 
+	/**
+		The WinRT member a property maps to — the one thing a Haxe type cannot
+		say, and therefore the only thing still written by hand.
+	**/
+	public static function winrtOf(type:String, key:String):Null<String> {
+		var cls = classOf(type);
+		if (cls == null) return null;
+
+		var found:String = null;
+		eachProp(cls, function(field, kind) {
+			if (field.name != key) return;
+			var meta = field.meta.extract(":winrt");
+			if (meta.length > 0 && meta[0].params.length > 0) {
+				switch (meta[0].params[0].expr) {
+					case EConst(CString(v, _)): found = v;
+					case _:
+				}
+			}
+		});
+		return found;
+	}
+
+	/**
+		The same lookup, on `View` itself.
+
+		The two rendering paths name their types differently — the transpiled one
+		uses WinUI's (`TextBlock`, `StackPanel`), the node one uses nui's (`Text`,
+		`VStack`) — so a lookup keyed by node type misses when the caller holds a
+		transpiled name. The properties every element has are declared on `View`,
+		which both paths share, so asking it directly answers either way.
+	**/
+	public static function viewProp(key:String):Null<{winrt:String, kind:String}> {
+		var cls = resolveClass("wui.View");
+		if (cls == null) return null;
+
+		var found:{winrt:String, kind:String} = null;
+		eachProp(cls, function(field, kind) {
+			if (field.name != key || found != null) return;
+			var meta = field.meta.extract(":winrt");
+			if (meta.length > 0 && meta[0].params.length > 0) {
+				switch (meta[0].params[0].expr) {
+					case EConst(CString(v, _)): found = {winrt: v, kind: kind};
+					case _:
+				}
+			}
+		});
+		return found;
+	}
+
 	/** Every known type, sorted, for an error message that helps. **/
 	public static function types():Array<String> {
 		var out = [for (t in all().keys()) t];

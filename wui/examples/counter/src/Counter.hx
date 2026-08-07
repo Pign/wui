@@ -24,48 +24,48 @@ class Counter extends wui.App {
         // Écrit en instructions : la macro suit désormais ce qu'on fait à une
         // locale après sa déclaration, pas seulement son initialiseur.
         var title = new Text("Counter");
-        title.font(Title);
-        title.padding();
+        title.font = "Title";
+        title.padding = 12;
 
         var display = new Text("Count: " + count);
-        display.font(TitleLarge);
-        display.foregroundColor(AccentColor);
-        display.padding();
+        display.font = "TitleLarge";
+        display.foregroundColor = "accent";
+        display.padding = 12;
 
         var minus = new Button("-", null, count.dec(1));
-        minus.padding();
+        minus.padding = 12;
         var reset = new Button("Reset", null, count.setTo(0));
-        reset.padding();
+        reset.padding = 12;
         var plus = new Button("+", null, count.inc(1));
-        plus.padding();
+        plus.padding = 12;
 
         var a = new Button("Haxe A");
         a.onClick(() -> report("A"));
-        a.padding();
+        a.padding = 12;
         var b = new Button("Haxe B");
         b.onClick(() -> report("B"));
-        b.padding();
+        b.padding = 12;
         var c = new Button("Haxe C");
         c.onClick(() -> report("C"));
-        c.padding();
+        c.padding = 12;
 
         var field = new TextBox("Tapez ici...", label);
-        field.padding();
+        field.padding = 12;
         var echo = new Text("Texte Haxe : " + label);
-        echo.padding();
+        echo.padding = 12;
 
         var writer = new Button("Haxe écrit le texte");
         writer.onClick(() -> {
             label.value = "écrit depuis Haxe (" + count.value + ")";
             trace('[wui] label = ${label.value}');
         });
-        writer.padding();
+        writer.padding = 12;
 
         var custom = new Button("Custom ×2", null, Custom(() -> {
             count.value = count.value * 2;
             trace('[wui] Custom : count = ${count.value}');
         }));
-        custom.padding();
+        custom.padding = 12;
 
         var root = new VStack([
             new Spacer(), title, display,
@@ -74,7 +74,7 @@ class Counter extends wui.App {
             field, echo, writer, custom,
             new Spacer()
         ]);
-        root.horizontalAlignment(Center);
+        root.horizontalAlignment = "Center";
         return root;
     }
 

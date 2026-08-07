@@ -368,10 +368,20 @@ class WinUIGenerator {
                     if (v == null) v = extractStringOrExpr(value);
                     if (v != null) node.properties.set(key, v);
 
-                // `a.onClick(...)`, `a.padding(...)`
+                // `a.onClick(...)`, and property assignments.
+                //
+                // `a.padding = 12` does not reach here as an assignment: a
+                // declared property has a setter, so the typed AST holds a call
+                // to `set_padding`. Reading it as a call is the only way to see
+                // an assignment at all.
                 case TCall({expr: TField(_, fa)}, args):
                     var called = fieldNameOf(fa);
-                    if (called == "onClick" && args.length > 0) {
+                    if (called != null && StringTools.startsWith(called, "set_") && args.length > 0) {
+                        var key = called.substr(4);
+                        var v:Dynamic = extractFloatValue(args[0]);
+                        if (v == null) v = extractStringOrExpr(args[0]);
+                        if (v != null) node.properties.set(key, v);
+                    } else if (called == "onClick" && args.length > 0) {
                         node.properties.set("hasHaxeCallback", true);
                     } else if (called != null) {
                         var modifier = extractModifier(called, args);

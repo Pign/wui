@@ -1,6 +1,5 @@
 package wui;
 
-import wui.modifiers.ViewModifier;
 
 /**
 	Base class for every wui view.
@@ -46,100 +45,32 @@ class View {
         this.properties = new Map();
     }
 
-    // --- Layout Modifiers ---
+    // --- Every property, declared ---
+    //
+    // These were fluent methods pushing onto a chain that nothing read at
+    // runtime, and that the generator reconstructed from the typed AST. They
+    // are vars now: the vocabulary derives them, the markup can check them, the
+    // generator emits them from the same declaration, and there is one shape
+    // per concept.
+    //
+    // `@:winrt` carries the only thing a Haxe type cannot say -- that `padding`
+    // reaches WinUI as `Padding`.
 
-    public function padding(?amount:Float):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
+    @:winrt("Padding") public var padding:Null<Float>;
+    @:winrt("Margin") public var margin:Null<Float>;
+    @:winrt("Opacity") public var opacity:Float = 1;
+    @:winrt("CornerRadius") public var cornerRadius:Null<Float>;
+    @:winrt("BorderThickness") public var borderThickness:Null<Float>;
 
-    public function margin(?amount:Float):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
+    @:winrt("Style") public var font:Null<String>;
+    @:winrt("FontSize") public var fontSize:Null<Float>;
 
-    public function frame(?width:Float, ?height:Float, ?minWidth:Float, ?maxWidth:Float, ?minHeight:Float, ?maxHeight:Float):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
+    // Colours cross as names. An unknown one leaves the control its own rather
+    // than a guessed approximation -- the call `cui` made in B5.
+    @:winrt("Foreground") public var foregroundColor:Null<String>;
+    @:winrt("Background") public var background:Null<String>;
+    @:winrt("BorderBrush") public var borderBrush:Null<String>;
 
-    public function horizontalAlignment(align:HorizontalAlign):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    public function verticalAlignment(align:VerticalAlign):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    // --- Typography Modifiers ---
-
-    public function font(style:FontStyle):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    public function fontSize(size:Float):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    public function bold():View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    public function italic():View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    // --- Color Modifiers ---
-
-    public function foregroundColor(color:ColorValue):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    public function background(color:ColorValue):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    public function opacity(value:Float):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    // --- Shape Modifiers ---
-
-    public function cornerRadius(radius:Float):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    public function borderBrush(color:ColorValue):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    public function borderThickness(thickness:Float):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    // --- Interaction Modifiers ---
-
-    public function toolTip(text:String):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
-
-    // --- Lifecycle Modifiers ---
-
-    public function onLoaded(callback:() -> Void):View {
-        // Read from the typed AST by WinUIGenerator, not stored here.
-        return this;
-    }
+    @:winrt("HorizontalAlignment") public var horizontalAlignment:Null<String>;
+    @:winrt("VerticalAlignment") public var verticalAlignment:Null<String>;
 }

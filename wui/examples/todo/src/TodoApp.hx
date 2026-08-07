@@ -65,7 +65,7 @@ class TodoApp extends wui.App {
 
 	override function body():View {
 		return new VStack([
-			new Text("Todo List").font(TitleLarge).padding(),
+			new Text("Todo List").font = "TitleLarge".padding = 12,
 
 			new HStack([
 				new TextBox("New item...", newItemText),
@@ -81,7 +81,7 @@ class TodoApp extends wui.App {
 					newItemText.value = "";
 					trace('[todo] ajouté : $title (${todos.value.length} au total)');
 				})
-			], 8).padding(),
+			], 8).padding = 12,
 
 			new ListView(todos, function(item:Dynamic) {
 				var todo:TodoItem = cast item;
@@ -96,9 +96,9 @@ class TodoApp extends wui.App {
 						trace('[todo] ${todo.title} -> ${todo.completed}');
 					})
 				], 8);
-			}).padding(),
+			}).padding = 12,
 
-			new Text("Astuce : tapez, Add, puis Done sur une ligne").padding()
+			new Text("Astuce : tapez, Add, puis Done sur une ligne").padding = 12
 		]);
 	}
 }
