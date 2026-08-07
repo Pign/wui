@@ -44,6 +44,20 @@ class Counter extends wui.App {
                 new Button("Haxe B").onClick(() -> report("B")).padding(),
                 new Button("Haxe C").onClick(() -> report("C")).padding()
             ]).spacing(8),
+            // W3 : l'écriture part de Haxe et l'affichage doit suivre.
+            //
+            // `count` vit ici, dans l'instance construite au démarrage ; le C++
+            // garde son `s_count`. Écrire `count.value` traverse le puits
+            // plateforme, le pont, puis le gestionnaire généré, qui affecte
+            // `s_count` et appelle `notify_count()` sur le thread UI.
+            //
+            // Attendu tant que W4 n'est pas fait : les boutons `+`/`-`/`Reset`
+            // modifient `s_count` sans prévenir Haxe, donc les deux valeurs
+            // divergent. Ce bouton-ci écrase l'écart en réaffectant depuis Haxe.
+            new Button("Haxe +10").onClick(() -> {
+                count.value = count.value + 10;
+                trace('[wui] count Haxe = ${count.value}');
+            }).padding(),
             new Spacer()
         ]).horizontalAlignment(Center);
     }

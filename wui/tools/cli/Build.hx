@@ -107,6 +107,7 @@ class Build {
         // Step 3: MSBuild
         Sys.println("[3/3] Building WinUI application...");
         var vcxproj = Path.join([winuiDir, '${wuiConfig.appName}.vcxproj']);
+        var startedAt = Date.now().getTime();
         var msbuildResult = runCommand(cwd, msbuildPath, [
             vcxproj,
             '-p:Configuration=$config',
@@ -115,15 +116,31 @@ class Build {
             verbose ? "-v:normal" : "-v:minimal"
         ], verbose);
 
-        // Check if the exe was produced (MSBuild may report non-fatal post-link errors)
+        // Did *this* build produce the exe?
+        //
+        // Existence alone is not the question, and answering it that way has now
+        // misled twice: once when the packaging targets died after linking, and
+        // once when the link itself failed (LNK1104) because the previous exe was
+        // still running -- both times a stale binary sat there and the build
+        // reported success. MSBuild's own exit code is not conclusive either,
+        // since it reports non-fatal post-link errors, so check the timestamp:
+        // the file has to be newer than the moment MSBuild started.
         var exeDir = Path.join([winuiDir, arch, config]);
         var exeFile = Path.join([exeDir, '${wuiConfig.appName}.exe']);
+        var exePath = 'build/winui/$arch/$config/${wuiConfig.appName}.exe';
+
         if (!FileSystem.exists(exeFile)) {
             Sys.println("Error: MSBuild failed — no exe produced.");
             Sys.exit(1);
         }
 
-        var exePath = 'build/winui/$arch/$config/${wuiConfig.appName}.exe';
+        // A second of slack: file times and clocks are not that precise.
+        if (FileSystem.stat(exeFile).mtime.getTime() < startedAt - 1000) {
+            Sys.println('Error: MSBuild failed — $exePath is left over from an earlier build.');
+            Sys.println("  A running copy of the app will do this: the linker cannot overwrite it.");
+            Sys.exit(1);
+        }
+
         Sys.println('Build complete: $exePath');
     }
 

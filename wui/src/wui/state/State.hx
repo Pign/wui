@@ -10,12 +10,20 @@ package wui.state;
  *   // The @:state macro wraps this as State<Int>
  *   // Then: count.value = 5; // notifies all subscribers
  *
- * IMPORTANT — this class does not run in a built app. `wui` is currently a
- * transpiler: `WinUIGenerator` reads the typed AST and emits C++ statics
- * (`s_<name>`, `s_<name>_listeners`, `notify_<name>()`), and the generated
- * Visual Studio project links no hxcpp. So this type is the authoring surface
- * and the model the macro reads — nothing more, until wui links hxcpp.
- * See `haxe-sailfish/docs/wui-hxcpp.md` for that chantier.
+ * This class DOES run in a built app, as of W3. `WinUIGenerator` still emits the
+ * C++ statics (`s_<name>`, `s_<name>_listeners`, `notify_<name>()`) and they are
+ * still what the controls read — but they are no longer the source of truth for
+ * a Haxe write. `HaxeBridge.bindStates()` subscribes to every instance in
+ * `_registry` and forwards to the generated `ApplyIntState`, which assigns the
+ * static and notifies, on the UI thread.
+ *
+ * **Two sources of truth remain, on purpose.** The generated Click handlers for
+ * `StateAction`s still mutate `s_<name>` directly, without telling Haxe, so the
+ * two values drift if both paths are used. W4 removes the translation and leaves
+ * only this one. Until then, mixing them is expected to look wrong.
+ *
+ * Only `Int` is pushed today; other types are reported, not silently dropped.
+ * See `wui-hxcpp.md` in the atelier repo for the sequence.
  */
 class State<T> extends rui.state.State<T> {
     var _listeners:Array<T -> Void>;

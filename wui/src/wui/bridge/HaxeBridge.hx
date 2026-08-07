@@ -29,15 +29,17 @@ package wui.bridge;
 
 	## Status
 
-	**W1 and W2 done, both verified on Windows by clicking.** MSVC links the
-	hxcpp library, `OnLaunched` boots it, and a button whose action is a Haxe
-	closure runs that closure — arbitrary Haxe, outside the four verbs the
-	generator can translate.
+	**W1, W2 and W3 done, all verified on Windows by clicking.** MSVC links the
+	hxcpp library, `OnLaunched` boots it, a button whose action is a Haxe closure
+	runs that closure, and a Haxe write to `@:state` reaches the controls.
 
-	Still transpiled: everything else. State lives in C++ statics, and the
-	generator still turns `StateAction`s into C++ (and still guesses an action
-	from a button's label when none is given). W3 moves the state, W4 removes
-	the translation — see `wui-hxcpp.md` in the atelier repo.
+	Both directions therefore work: C++ -> Haxe through `wui_bridge_invoke`,
+	Haxe -> C++ through `wui_bridge_push_int`.
+
+	What is left: the generator still translates `StateAction`s into C++ that
+	mutates `s_<name>` behind Haxe's back — so both paths hold a value and they
+	drift if mixed — and it still guesses an action from a button's label when
+	none is given. W4 removes both. See `wui-hxcpp.md` in the atelier repo.
 **/
 #if cpp
 @:cppFileCode('
@@ -88,6 +90,26 @@ extern "C" void wui_bridge_invoke(int id) {
     if (!s_wui_haxe_started) return;
     ::wui::bridge::Callbacks_obj::invoke(id);
 }
+
+// ---- Haxe state -> generated C++ ----
+//
+// A slot, not a symbol resolved at link time. The generated MainWindow.cpp owns
+// `s_<name>` and `notify_<name>()`, so it registers a handler here at startup and
+// this library never names it. That keeps the hxcpp library linkable on its own:
+// a test binary links it with no handler and pushes nowhere, which is how `sui`
+// keeps its runtime optional and detected.
+typedef void (*wui_int_handler)(const char*, int);
+static wui_int_handler s_wui_int_handler = nullptr;
+
+extern "C" void wui_bridge_set_int_handler(wui_int_handler fn) {
+    s_wui_int_handler = fn;
+}
+
+// Called from Haxe when a state changes. Getting onto the UI thread is the
+// handler\'s business -- it is the side that knows about the dispatcher.
+extern "C" void wui_bridge_push_int(const char* name, int value) {
+    if (s_wui_int_handler) s_wui_int_handler(name, value);
+}
 ')
 #end
 @:keep
@@ -136,7 +158,49 @@ class HaxeBridge {
 		}
 
 		collect(root);
+		bindStates();
 		return Callbacks.count();
+	}
+
+	/**
+		Make every `@:state` field push its writes to the generated C++.
+
+		Constructing the app filled `wui.state.State`'s registry, so the fields
+		are already there to be found — no macro-generated glue needed to name
+		them. Each one gets a subscriber that forwards to the native handler, and
+		since `wui.state.State` already routes its platform sink through that
+		subscriber list, a plain `count.value = 3` reaches the UI.
+
+		**Only `Int` travels today.** The other types are reported rather than
+		skipped in silence: a state that quietly stops updating the UI is the
+		failure this whole increment exists to make impossible.
+	**/
+	static function bindStates():Int {
+		var bound = 0;
+
+		for (name in wui.state.State._registry.keys()) {
+			var st:Dynamic = wui.state.State._registry.get(name);
+			if (st == null) continue;
+
+			var current:Dynamic = st.peek();
+			if (Std.isOfType(current, Int)) {
+				st.subscribe(function(v:Dynamic) {
+					pushInt(name, cast(v, Int));
+				});
+				bound++;
+			} else {
+				trace('[wui] state "$name": only Int reaches the UI so far, not pushing');
+			}
+		}
+
+		return bound;
+	}
+
+	/** Hand one integer to the generated C++, which owns `s_<name>`. **/
+	static function pushInt(name:String, value:Int):Void {
+		#if cpp
+		untyped __cpp__("wui_bridge_push_int({0}.utf8_str(), {1})", name, value);
+		#end
 	}
 
 	/**

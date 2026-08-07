@@ -64,16 +64,22 @@ class CallbackOrder {
 
 		// --- the runtime walk ---
 		var installed = HaxeBridge.install("Counter");
-		check("install() finds the closures", installed == 3, 'got $installed');
+		check("install() finds closures at all", installed > 0, 'got $installed');
 		check("registry agrees", Callbacks.count() == installed);
 
 		// --- what the generator wrote ---
+		//
+		// The count is not hardcoded: it comes from the generated file, so adding
+		// a button to the example cannot silently half-break this test.
 		var generated = idsFromGeneratedCpp("build/winui/MainWindow.cpp");
 		var genCount = Lambda.count(generated);
 		check("generated C++ has the same number of ids", genCount == installed,
 			'C++ has $genCount, runtime has $installed');
 
 		// --- the agreement itself ---
+		var state:Dynamic = wui.state.State.getByName("count");
+		check("the @:state field registered itself", state != null);
+
 		for (id in 0...installed) {
 			var label = generated.exists(id) ? generated.get(id) : null;
 			if (label == null) {
@@ -81,14 +87,45 @@ class CallbackOrder {
 				continue;
 			}
 
-			Counter.last = null;
-			Callbacks.invoke(id);
+			if (label == "Haxe +10") {
+				// W3: the closure writes Haxe state. The native hop is absent
+				// here -- no handler is registered outside a WinUI app -- but
+				// everything up to it is exercised, and a push that went nowhere
+				// must still leave the Haxe value correct.
+				var before:Int = state.peek();
+				Callbacks.invoke(id);
+				check('id $id writes the state through "$label"',
+					(state.peek() : Int) == before + 10,
+					'went from $before to ${state.peek()}');
+			} else {
+				Counter.last = null;
+				Callbacks.invoke(id);
 
-			// "Haxe A" -> "A": the closure reports the bare letter.
-			var expected = StringTools.replace(label, "Haxe ", "");
-			check('id $id runs the closure of "$label"', Counter.last == expected,
-				'ran "${Counter.last}", expected "$expected"');
+				// "Haxe A" -> "A": the closure reports the bare letter.
+				var expected = StringTools.replace(label, "Haxe ", "");
+				check('id $id runs the closure of "$label"', Counter.last == expected,
+					'ran "${Counter.last}", expected "$expected"');
+			}
 		}
+
+		// --- the subscriber the push rides on ---
+		//
+		// `wui.state.State` routes its platform sink through the subscriber list,
+		// and HaxeBridge.bindStates() adds one that forwards to native. Checking a
+		// write reaches a subscriber checks that route without needing the app.
+		var seen:Array<Int> = [];
+		state.subscribe(function(v:Dynamic) seen.push(v));
+		// set(), not `.value =` -- a property assigned through Dynamic throws
+		// "Invalid field:value" on hxcpp.
+		state.set(4242);
+		check("a write reaches the subscribers", seen.length == 1 && seen[0] == 4242,
+			'received $seen');
+
+		// A write of the same value must not re-notify: rui.state.State stops it,
+		// and every push costs a thread hop to the UI.
+		seen = [];
+		state.set(4242);
+		check("an unchanged write notifies nobody", seen.length == 0, 'received $seen');
 
 		// --- an id nobody assigned must not run anything ---
 		Counter.last = null;

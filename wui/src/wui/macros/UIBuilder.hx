@@ -87,6 +87,30 @@ namespace MainWindow {
             notifyFuncs += '    }\n';
         }
 
+        // The way a Haxe write reaches these statics.
+        //
+        // `s_<name>` and `notify_<name>()` are static to this file, so the hxcpp
+        // library cannot touch them. It exposes a slot instead, and this handler
+        // fills it -- which also means an app built without Haxe still compiles,
+        // because nothing here is required to exist on the other side.
+        var intStates = [for (sf in stateFields) if (sf.type == "int") sf];
+        var applyIntBody = "";
+        for (sf in intStates) {
+            applyIntBody += '        if (n == "${sf.name}") { s_${sf.name} = value; notify_${sf.name}(); return; }\n';
+        }
+        var applyIntFunc = "";
+        var registerHandler = "";
+        if (intStates.length > 0) {
+            applyIntFunc = '    static void ApplyIntState(const char* name, int value) {\n'
+                + '        std::string n(name);\n'
+                + '        // A Haxe write can land on any thread; XAML only tolerates one.\n'
+                + '        wui::runtime::runOnUIThread([n, value]() {\n'
+                + applyIntBody
+                + '        });\n'
+                + '    }\n';
+            registerHandler = '    wui_bridge_set_int_handler(&ApplyIntState);\n';
+        }
+
         // Build state binding subscriptions
         var subscriptionLines = "";
         for (binding in stateBindings) {
@@ -106,11 +130,13 @@ namespace MainWindow {
         var sourceContent = '#include "pch.h"
 #include "MainWindow.h"
 #include <vector>
+#include <string>
 
 // Implemented in the hxcpp library (wui.bridge.HaxeBridge). Declared rather
 // than included: this file must keep compiling when no Haxe closure is used,
 // and hxcpp headers have no business in the UI translation unit.
 extern "C" void wui_bridge_invoke(int id);
+extern "C" void wui_bridge_set_int_handler(void (*fn)(const char*, int));
 
 namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
@@ -124,11 +150,14 @@ $stateDecls
 $subscriberDecls
     // ---- Notify helpers ----
 $notifyFuncs
+    // ---- Haxe state -> these statics ----
+$applyIntFunc
 winrt_xaml::UIElement BuildUI(winrt_xaml::Window const& window)
 {
     // Store dispatcher for thread-safe UI updates
     wui::runtime::dispatcherQueue = window.DispatcherQueue();
 
+$registerHandler
 $bodyStr
     // ---- State bindings ----
 $subscriptionLines
