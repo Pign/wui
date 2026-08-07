@@ -107,7 +107,6 @@ class Build {
         // Step 3: MSBuild
         Sys.println("[3/3] Building WinUI application...");
         var vcxproj = Path.join([winuiDir, '${wuiConfig.appName}.vcxproj']);
-        var startedAt = Date.now().getTime();
         var msbuildResult = runCommand(cwd, msbuildPath, [
             vcxproj,
             '-p:Configuration=$config',
@@ -116,28 +115,34 @@ class Build {
             verbose ? "-v:normal" : "-v:minimal"
         ], verbose);
 
-        // Did *this* build produce the exe?
+        // Believe MSBuild's exit code.
         //
-        // Existence alone is not the question, and answering it that way has now
-        // misled twice: once when the packaging targets died after linking, and
-        // once when the link itself failed (LNK1104) because the previous exe was
-        // still running -- both times a stale binary sat there and the build
-        // reported success. MSBuild's own exit code is not conclusive either,
-        // since it reports non-fatal post-link errors, so check the timestamp:
-        // the file has to be newer than the moment MSBuild started.
+        // This used to ask only whether the exe existed, on the theory that
+        // MSBuild reports non-fatal post-link errors. It misled twice: once when
+        // the packaging targets died after linking and left an app that could not
+        // start, and once when the link itself failed (LNK1104, a running copy of
+        // the app) and a stale binary answered "yes, it exists".
+        //
+        // A timestamp check replaced it and was wrong in the other direction: an
+        // incremental build with nothing to do relinks nothing, so the exe keeps
+        // its old date and a perfectly good build was reported as a failure.
+        // Neither "exists" nor "is fresh" is the question — "did MSBuild succeed"
+        // is, and MSBuild answers it.
         var exeDir = Path.join([winuiDir, arch, config]);
         var exeFile = Path.join([exeDir, '${wuiConfig.appName}.exe']);
         var exePath = 'build/winui/$arch/$config/${wuiConfig.appName}.exe';
 
-        if (!FileSystem.exists(exeFile)) {
-            Sys.println("Error: MSBuild failed — no exe produced.");
+        if (msbuildResult != 0) {
+            Sys.println('Error: MSBuild failed (exit code $msbuildResult).');
+            if (FileSystem.exists(exeFile)) {
+                Sys.println('  $exePath is from an earlier build; do not run it as if it were this one.');
+                Sys.println("  A running copy of the app causes this: the linker cannot overwrite it.");
+            }
             Sys.exit(1);
         }
 
-        // A second of slack: file times and clocks are not that precise.
-        if (FileSystem.stat(exeFile).mtime.getTime() < startedAt - 1000) {
-            Sys.println('Error: MSBuild failed — $exePath is left over from an earlier build.');
-            Sys.println("  A running copy of the app will do this: the linker cannot overwrite it.");
+        if (!FileSystem.exists(exeFile)) {
+            Sys.println("Error: MSBuild reported success but produced no exe.");
             Sys.exit(1);
         }
 

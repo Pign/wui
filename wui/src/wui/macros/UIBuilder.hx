@@ -291,54 +291,20 @@ $subscriptionLines
             lines.push('$varName.Content(winrt::box_value(L"$escaped"));');
         }
 
-        // A Haxe closure: call into the registry by id rather than translating
-        // anything. This is the path that lifts the ceiling -- the closure can
-        // hold arbitrary Haxe, because nothing here needs to understand it.
+        // The only click path there is.
+        //
+        // Every action -- a Haxe closure or a `StateAction` -- reaches Haxe by id.
+        // What used to sit here instead: a translation of four `StateAction`
+        // constructors into C++ that mutated `s_<name>` directly, and, failing
+        // that, a guess at the intent from the button's *label* ("+" incremented
+        // the first state field, "Reset" assigned its initial value). Both are
+        // gone. The label heuristic could not have survived W3 anyway: it wrote
+        // to a static Haxe no longer agreed with.
         var callbackId = node.properties.get("haxeCallbackId");
         if (callbackId != null) {
             lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
             lines.push('    wui_bridge_invoke($callbackId);');
             lines.push('});');
-        }
-
-        // Click handler — from onClick property, StateAction, or auto-detected state action
-        var onClick = node.properties.get("onClick");
-        if (onClick != null) {
-            var code = Std.string(onClick);
-            lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    $code');
-            lines.push('});');
-        }
-
-        var action = node.properties.get("action");
-        if (action != null) {
-            var actionCode = generateStateActionCode(action);
-            lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-            lines.push('    $actionCode');
-            lines.push('});');
-        }
-
-        // Auto-wire: if there are state fields and no explicit handler, detect by label.
-        // A Haxe closure counts as an explicit handler -- otherwise a button named
-        // "Reset" would fire both its closure and this guess.
-        if (onClick == null && action == null && callbackId == null && stateFields.length > 0) {
-            var sf = stateFields[0]; // use first state field
-            var labelStr = label != null ? Std.string(label) : "";
-            var clickCode:String = null;
-
-            if (labelStr == "+" || labelStr == "Increment" || labelStr == "+ Increment") {
-                clickCode = 's_${sf.name}++; notify_${sf.name}();';
-            } else if (labelStr == "-" || labelStr == "Decrement" || labelStr == "- Decrement") {
-                clickCode = 's_${sf.name}--; notify_${sf.name}();';
-            } else if (labelStr == "Reset") {
-                clickCode = 's_${sf.name} = ${sf.initial}; notify_${sf.name}();';
-            }
-
-            if (clickCode != null) {
-                lines.push('$varName.Click([](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {');
-                lines.push('    $clickCode');
-                lines.push('});');
-            }
         }
 
         applyModifiers(varName, "Button", node.modifiers, lines);
@@ -674,11 +640,6 @@ $subscriptionLines
         };
     }
 
-    static function generateStateActionCode(action:Dynamic):String {
-        // Generates C++ code for a StateAction
-        // This will be expanded as the state system matures
-        return "// StateAction: TODO";
-    }
 
     // ---- Utilities ----
 

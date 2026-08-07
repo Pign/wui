@@ -124,6 +124,15 @@ class WinUIGenerator {
         Sys.println('[wui] C++/WinRT project generated at: $winuiDir');
     }
 
+    /** Is this argument a literal `null`, as in `new Button("x", null, action)`? **/
+    static function isNullLiteral(expr:TypedExpr):Bool {
+        if (expr == null) return true;
+        return switch (expr.expr) {
+            case TConst(TNull): true;
+            default: false;
+        };
+    }
+
     /**
      * Give every closure-bearing button its id, depth-first, and return how many
      * were numbered.
@@ -401,11 +410,14 @@ class WinUIGenerator {
                 var props:Map<String, Dynamic> = new Map();
                 props.set("label", label);
                 // args[1] = icon (optional), args[2] = action (StateAction)
-                if (args.length > 2) {
-                    var actionCode = extractStateAction(args[2]);
-                    if (actionCode != null) {
-                        props.set("onClick", actionCode);
-                    }
+                //
+                // The action is no longer translated into C++. It is marked, given
+                // an id like any Haxe closure, and `wui.bridge.Actions` runs the
+                // enum at runtime. That is what lets `Custom`, `Sequence`, `Append`
+                // and `Remove` work at all -- the translator understood four of the
+                // nine constructors and dropped the others without a word.
+                if (args.length > 2 && !isNullLiteral(args[2])) {
+                    props.set("hasHaxeCallback", true);
                 }
                 { viewType: "Button", children: [], modifiers: [], properties: props };
 
@@ -729,72 +741,11 @@ class WinUIGenerator {
                 }
                 return null;
 
-            case TField(_, fa):
-                var name = switch (fa) {
-                    case FInstance(_, _, cf): cf.get().name;
-                    case FDynamic(s): s;
-                    default: null;
-                };
-                // Direct field reference like this.count
-                if (name != null) {
-                    for (sf in UIBuilder.stateFields) {
-                        if (name == sf.name) return sf.name;
-                    }
-                }
-                return null;
             default:
                 return null;
         }
     }
 
-    /**
-     * Try to extract a state action from a typed expression.
-     * Detects patterns like: count.inc(1), count.dec(1), count.setTo(0), count.tog()
-     * Returns a C++ code string or null.
-     */
-    static function extractStateAction(expr:TypedExpr):String {
-        if (expr == null) return null;
-
-        // Resolve local variables
-        switch (expr.expr) {
-            case TLocal(v):
-                var resolved = localExprs.get(v.name);
-                if (resolved != null) return extractStateAction(resolved);
-            default:
-        }
-
-        switch (expr.expr) {
-            case TCall(func, args):
-                switch (func.expr) {
-                    case TField(obj, fa):
-                        var methodName = switch (fa) {
-                            case FInstance(_, _, cf): cf.get().name;
-                            case FDynamic(s): s;
-                            default: null;
-                        };
-
-                        // obj should be a state field
-                        var stateName = extractStateFieldRef(obj);
-                        if (stateName == null) return null;
-
-                        var amount = args.length > 0 ? extractFloatValue(args[0]) : null;
-                        var amountStr = amount != null ? Std.string(Std.int(amount)) : "1";
-
-                        return switch (methodName) {
-                            case "inc": 's_$stateName += $amountStr; notify_$stateName();';
-                            case "dec": 's_$stateName -= $amountStr; notify_$stateName();';
-                            case "setTo":
-                                var val = amount != null ? Std.string(Std.int(amount)) : "0";
-                                's_$stateName = $val; notify_$stateName();';
-                            case "tog": 's_$stateName = !s_$stateName; notify_$stateName();';
-                            default: null;
-                        };
-                    default:
-                }
-            default:
-        }
-        return null;
-    }
 
     /**
      * Analyze a Text argument for state-bound expressions.

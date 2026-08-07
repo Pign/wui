@@ -215,9 +215,16 @@ class HaxeBridge {
 		if (view == null) return;
 
 		if (view.viewType == "Button") {
+			// Exactly one registration per button that has an action, in either
+			// form, because the generator numbers buttons the same way. A button
+			// carrying both takes the closure: it is the more specific of the two.
 			var cb = view.properties.get("onClick");
+			var action = view.properties.get("action");
+
 			if (Reflect.isFunction(cb)) {
 				Callbacks.register(cb);
+			} else if (action != null) {
+				Callbacks.register(function() Actions.run(action));
 			}
 		}
 

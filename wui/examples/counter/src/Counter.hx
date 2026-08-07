@@ -3,6 +3,7 @@ import wui.ui.VStack;
 import wui.ui.HStack;
 import wui.ui.Text;
 import wui.ui.Button;
+import wui.state.StateAction;
 import wui.ui.Spacer;
 import wui.modifiers.ViewModifier.FontStyle;
 import wui.modifiers.ViewModifier.ColorValue;
@@ -58,6 +59,13 @@ class Counter extends wui.App {
                 count.value = count.value + 10;
                 trace('[wui] count Haxe = ${count.value}');
             }).padding(),
+            // W4 : `Custom` transportait déjà du code arbitraire dans l'enum, mais
+            // le traducteur ne le connaissait pas et le bouton perdait simplement
+            // son gestionnaire, sans un mot. Interprété à l'exécution, il marche.
+            new Button("Custom ×2", null, Custom(() -> {
+                count.value = count.value * 2;
+                trace('[wui] Custom : count = ${count.value}');
+            })).padding(),
             new Spacer()
         ]).horizontalAlignment(Center);
     }

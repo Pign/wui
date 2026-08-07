@@ -87,24 +87,36 @@ class CallbackOrder {
 				continue;
 			}
 
-			if (label == "Haxe +10") {
-				// W3: the closure writes Haxe state. The native hop is absent
-				// here -- no handler is registered outside a WinUI app -- but
-				// everything up to it is exercised, and a push that went nowhere
-				// must still leave the Haxe value correct.
-				var before:Int = state.peek();
-				Callbacks.invoke(id);
-				check('id $id writes the state through "$label"',
-					(state.peek() : Int) == before + 10,
-					'went from $before to ${state.peek()}');
-			} else {
-				Counter.last = null;
-				Callbacks.invoke(id);
+			var before:Int = state.peek();
+			Counter.last = null;
+			Callbacks.invoke(id);
+			var after:Int = state.peek();
 
-				// "Haxe A" -> "A": the closure reports the bare letter.
-				var expected = StringTools.replace(label, "Haxe ", "");
-				check('id $id runs the closure of "$label"', Counter.last == expected,
-					'ran "${Counter.last}", expected "$expected"');
+			// Since W4 every button routes through Haxe, whether its action was
+			// written as a closure or as a StateAction. So the expectation is per
+			// label, and the StateAction ones are the interesting half: they used
+			// to be C++ that mutated `s_count` behind Haxe's back.
+			switch (label) {
+				case "+":
+					check('id $id — StateAction Increment', after == before + 1,
+						'$before -> $after');
+				case "-":
+					check('id $id — StateAction Decrement', after == before - 1,
+						'$before -> $after');
+				case "Reset":
+					check('id $id — StateAction SetValue', after == 0, '$before -> $after');
+				case "Haxe +10":
+					check('id $id — closure writes the state', after == before + 10,
+						'$before -> $after');
+				case "Custom ×2":
+					// The one the translator dropped in silence.
+					check('id $id — StateAction Custom runs at all', after == before * 2,
+						'$before -> $after');
+				case _:
+					// "Haxe A" -> "A": the closure reports the bare letter.
+					var expected = StringTools.replace(label, "Haxe ", "");
+					check('id $id runs the closure of "$label"', Counter.last == expected,
+						'ran "${Counter.last}", expected "$expected"');
 			}
 		}
 

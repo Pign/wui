@@ -17,14 +17,32 @@ import haxe.io.Path;
 class ProjectGenerator {
     #if macro
 
-    /** Write file only if content has changed (avoids locking issues with MSBuild). */
+    /**
+        Write a file only if its content changed, with a UTF-8 BOM on C++ sources.
+
+        **MSVC needs that BOM.** Given a source file without one, it decodes the
+        bytes using the machine's active code page rather than UTF-8. A label
+        written here as correct UTF-8 — `"Custom ×2"` — is read back there as
+        `Ã—`, so the app shows mojibake. Worse, whether it does depends on the
+        machine's code page, which is the least reproducible way for a bug to
+        behave.
+
+        Haxe strings are UTF-8, so the fix is to say so inside the file. Only C++
+        sources get it: `.vcxproj` and `packages.config` declare their encoding
+        in an XML prologue, which must come first.
+
+        (Writing only on change avoids locking issues with MSBuild.)
+    **/
     public static function writeIfChanged(path:String, content:String):Void {
+        var needsBom = StringTools.endsWith(path, ".cpp") || StringTools.endsWith(path, ".h");
+        var toWrite = needsBom ? String.fromCharCode(0xFEFF) + content : content;
+
         if (FileSystem.exists(path)) {
             var existing = File.getContent(path);
-            if (existing == content) return;
+            if (existing == toWrite) return;
         }
         try {
-            File.saveContent(path, content);
+            File.saveContent(path, toWrite);
         } catch (e:Dynamic) {
             // File may be locked by MSBuild — skip if unchanged write fails
             Sys.println('[wui] Warning: Could not write $path (file may be locked)');
