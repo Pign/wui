@@ -70,7 +70,18 @@ class Reconciler<Native> {
 
 		applyChangedProps(prev.node, node, prev.handle);
 		applyChangedModifiers(prev.node, node, prev.handle);
-		mounted.children = reconcileChildren(prev, node, prev.handle);
+
+		// A deferred list is re-established rather than diffed here: the new node
+		// carries a **new** thunk, closing over whatever the app just read, and
+		// the old effect is subscribed to the old one.
+		if (prev.effect != null) prev.effect.dispose();
+
+		if (node.childrenThunk != null) {
+			mounted.children = prev.children;
+			installListEffect(mounted, node);
+		} else {
+			mounted.children = reconcileList(prev.children, node.children == null ? [] : node.children, prev.handle);
+		}
 
 		return mounted;
 	}
@@ -85,12 +96,38 @@ class Reconciler<Native> {
 		}
 		sink.applyModifiers(handle, node.type, node.modifiers);
 
-		for (child in childrenOf(node)) {
-			mounted.children.push(mount(child, handle, -1));
+		if (node.childrenThunk != null) {
+			// Mounting the list is the effect's first run, so it happens here and
+			// then again by itself whenever the data it read changes.
+			installListEffect(mounted, node);
+		} else {
+			for (child in (node.children == null ? [] : node.children)) {
+				mounted.children.push(mount(child, handle, -1));
+			}
 		}
 
 		if (parent != null) sink.insert(parent, handle, index);
 		return mounted;
+	}
+
+	/**
+		Give a node with deferred children an effect that owns them.
+
+		This is the whole of N3. Without it a list still works — a full re-render
+		rebuilds the tree and the diff finds the change — but the cost is
+		proportional to the size of the **interface**, not of the change. With it,
+		adding one row to a thousand touches that list and nothing else: the thunk
+		reads the data, so the effect is subscribed to exactly what the list
+		depends on, and the tree above is never walked.
+
+		`bindReactive` does this for one **property**; this does it for one
+		**list**. Same idea, one level up.
+	**/
+	function installListEffect(mounted:Mounted<Native>, node:Node):Void {
+		mounted.effect = new rui.Signal.Effect(function() {
+			var children = node.childrenThunk();
+			mounted.children = reconcileList(mounted.children, children == null ? [] : children, mounted.handle);
+		});
 	}
 
 	/** Take a subtree off screen and release it. **/
@@ -100,7 +137,15 @@ class Reconciler<Native> {
 	}
 
 	function destroyDeep(mounted:Mounted<Native>):Void {
-		// Children first: a parent that frees its handle before its children are
+		// The effect goes first. It is subscribed to signals that outlive this
+		// subtree, and a write to one of them would otherwise re-reconcile a list
+		// whose handles have just been freed.
+		if (mounted.effect != null) {
+			mounted.effect.dispose();
+			mounted.effect = null;
+		}
+
+		// Children next: a parent that frees its handle before its children are
 		// released leaves them named by a handle nobody can reach.
 		for (child in mounted.children) destroyDeep(child);
 		sink.destroy(mounted.handle);
@@ -187,9 +232,7 @@ class Reconciler<Native> {
 		and re-inserted at its new index, keeping the control and everything the
 		user put into it.
 	**/
-	function reconcileChildren(prev:Mounted<Native>, node:Node, handle:Native):Array<Mounted<Native>> {
-		var oldChildren = prev.children;
-		var newChildren = childrenOf(node);
+	function reconcileList(oldChildren:Array<Mounted<Native>>, newChildren:Array<Node>, handle:Native):Array<Mounted<Native>> {
 		var result:Array<Mounted<Native>> = [];
 
 		// Index the keyed survivors so a move can find them.
@@ -234,9 +277,4 @@ class Reconciler<Native> {
 		return result;
 	}
 
-	/** `childrenThunk` wins when set — that is how a list defers its contents. **/
-	static function childrenOf(node:Node):Array<Node> {
-		var children = node.childrenThunk != null ? node.childrenThunk() : node.children;
-		return children == null ? [] : children;
-	}
 }

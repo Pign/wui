@@ -26,6 +26,10 @@ import wui.ui.VStack;
 class NuiTree extends wui.App {
 	static var clicks = 0;
 	static var labels = ["Alpha", "Bravo", "Charlie"];
+
+	// N3 : les lignes vivent dans un signal, et la liste s'y abonne elle-même.
+	static var items = new rui.Signal(["première ligne"]);
+	static var added = 1;
 	static var title = "Arbre nui, rendu par WinUI";
 
 	static function main() {}
@@ -72,6 +76,27 @@ class NuiTree extends wui.App {
 		// elsewhere.
 		var unknown = wui.nui.Foreign.node("Hologramme");
 
+		// Une liste à enfants différés. Le thunk lit `items`, donc l'effet créé par
+		// le réconciliateur est abonné exactement à ce dont la liste dépend : une
+		// écriture dans `items` la met à jour seule, sans que l'arbre au-dessus
+		// soit reparcouru.
+		var list = new Node("VStack", "liste").prop("spacing", PInt(2));
+		list.childrenThunk = function() {
+			return [for (it in items.value) new Node("Text", it).prop("text", PString("· " + it))];
+		};
+		list.modifiers.push({type: "padding", floats: [12]});
+
+		// Ce bouton n'appelle PAS rerenderNui(). Il écrit dans le signal, et
+		// c'est tout — si la liste s'allonge quand même, N3 fonctionne.
+		var add = new Node("Button", "add")
+			.prop("text", PString("Ajouter une ligne (sans re-rendu)"))
+			.prop("onClick", PCallback(function() {
+				added++;
+				items.value = items.value.concat(["ligne " + added]);
+				trace('[nui] liste : ${items.value.length} ligne(s), sans re-rendu');
+			}));
+		add.modifiers.push({type: "padding", floats: [12]});
+
 		var shuffle = new Node("Button", "shuffle")
 			.prop("text", PString("Mélanger"))
 			.prop("onClick", PCallback(function() {
@@ -88,6 +113,8 @@ class NuiTree extends wui.App {
 			.child(box)
 			.child(row)
 			.child(shuffle)
+			.child(add)
+			.child(list)
 			.child(unknown);
 		root.modifiers.push({type: "padding", floats: [16]});
 		return root;

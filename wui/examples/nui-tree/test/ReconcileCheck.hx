@@ -164,6 +164,64 @@ class ReconcileCheck {
 		check("a vanished property with no default is left alone",
 			count(sink.ops, "prop") == 0, sink.ops.join(" | "));
 
+		// --- N3: a deferred list re-reconciles itself ---
+		//
+		// The assertions that matter are again negative. A list whose data
+		// changes must touch *its own* rows and nothing above it: no work on the
+		// header, no walk of the tree, no rebuild of the surrounding panel.
+		var rows = new rui.Signal(["un", "deux"]);
+
+		var listNode = new Node("VStack", "liste");
+		listNode.childrenThunk = function() {
+			return [for (r in rows.value) new Node("Text", r).prop("text", PString(r))];
+		};
+
+		var page = new Node("VStack")
+			.child(new Node("Text", "entete").prop("text", PString("Entête")))
+			.child(listNode);
+
+		sink.ops = [];
+		var m4 = r.reconcile(null, page, 0);
+		// Five: the page, the header, the list, and its two rows.
+		check("a deferred list mounts its rows", count(sink.ops, "create") == 5,
+			'${count(sink.ops, "create")} creates');
+
+		// Add a row. Nothing calls the reconciler: the effect the thunk created
+		// is subscribed to `rows`, and it fires on its own.
+		sink.ops = [];
+		rows.value = ["un", "deux", "trois"];
+		check("adding a row needs no re-render from above", count(sink.ops, "create") == 1,
+			sink.ops.join(" | "));
+		check("the rows already there are not rebuilt", count(sink.ops, "destroy") == 0,
+			sink.ops.join(" | "));
+		// The new row gets its own property, of course. What must NOT appear is
+		// anything else: no removal, and no total larger than one row costs --
+		// create, its text, its (empty) modifiers, its insertion.
+		check("only the new row is touched",
+			count(sink.ops, "remove") == 0 && sink.ops.length <= 4,
+			sink.ops.join(" | "));
+
+		// Remove one: same, in reverse.
+		sink.ops = [];
+		rows.value = ["un"];
+		check("removing rows destroys exactly those rows", count(sink.ops, "destroy") == 2,
+			sink.ops.join(" | "));
+		check("removing rows creates nothing", count(sink.ops, "create") == 0,
+			sink.ops.join(" | "));
+
+		// A list that leaves must take its effect with it, or a later write
+		// re-reconciles rows whose handles are gone.
+		sink.ops = [];
+		var pageWithoutList = new Node("VStack")
+			.child(new Node("Text", "entete").prop("text", PString("Entête")));
+		m4 = r.reconcile(m4, pageWithoutList, 0);
+		var afterUnmount = sink.ops.length;
+
+		sink.ops = [];
+		rows.value = ["un", "deux", "trois", "quatre"];
+		check("an unmounted list stops listening", sink.ops.length == 0,
+			'still emitted ${sink.ops.join(" | ")}');
+
 		Sys.println(failures == 0 ? "\nall good" : '\n$failures failed');
 		Sys.exit(failures == 0 ? 0 : 1);
 	}
