@@ -143,6 +143,7 @@ class ProjectGenerator {
     </ClCompile>
     <ClCompile Include="App.cpp" />
     <ClCompile Include="MainWindow.cpp" />
+    <ClCompile Include="WuiNodes.cpp" />
   </ItemGroup>
 
   <ItemGroup>
@@ -150,6 +151,7 @@ class ProjectGenerator {
     <ClInclude Include="App.h" />
     <ClInclude Include="MainWindow.h" />
     <ClInclude Include="WuiRuntime.h" />
+    <ClInclude Include="WuiNodes.h" />
   </ItemGroup>
 
   <ItemGroup>

@@ -100,4 +100,38 @@ class Callbacks {
 		}
 		rowHandlers[id]();
 	}
+
+	// ---- nui nodes: a third range, for the push contract ----
+	//
+	// Node handlers outlive a rebuild (a node keeps its control) but are not
+	// numbered at compile time either, so they belong to neither table above.
+	// Three ranges rather than one shared counter: the cost is a few lines, and
+	// the alternative is an id from one world reaching a closure from another.
+
+	static var nodeHandlers:Array<Void->Void> = [];
+
+	/** Add a node property handler and return its id. **/
+	public static function registerNode(fn:Void->Void):Int {
+		nodeHandlers.push(fn);
+		return nodeHandlers.length - 1;
+	}
+
+	/** How many node handlers are registered. **/
+	public static function nodeCount():Int {
+		return nodeHandlers.length;
+	}
+
+	/** Drop them all. Called when a tree is mounted from scratch. **/
+	public static function resetNodes():Void {
+		nodeHandlers = [];
+	}
+
+	/** Run a node property handler. **/
+	public static function invokeNode(id:Int):Void {
+		if (id < 0 || id >= nodeHandlers.length) {
+			trace('[wui] no node callback for id $id (${nodeHandlers.length} registered)');
+			return;
+		}
+		nodeHandlers[id]();
+	}
 }

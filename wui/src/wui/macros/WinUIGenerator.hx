@@ -94,6 +94,14 @@ class WinUIGenerator {
         // Collect @:state fields
         UIBuilder.stateFields = collectStateFields(appType);
 
+        // An app marked @:nui renders through the push contract instead of the
+        // generated UI: the window gets an empty root and Haxe mounts into it.
+        var pushMode = switch (appType) {
+            case TInst(ref, _): ref.get().meta.has(":nui");
+            case _: false;
+        };
+        UIBuilder.pushMode = pushMode;
+
         // Build the view tree from body()
         var viewTree = buildViewTree(appType);
 

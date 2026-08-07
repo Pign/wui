@@ -19,9 +19,251 @@ class BridgeGenerator {
             FileSystem.createDirectory(outputDir);
         }
 
+        generateNodeRuntime(outputDir);
         generateAppHeader(appName, outputDir);
         generateAppSource(appName, outputDir, windowWidth, windowHeight, appClassPath, callbackCount);
         generateRuntime(outputDir);
+    }
+
+
+    /**
+        Emit the node runtime: a handle table and the six operations of
+        `nui.NodeSink`, implemented against WinUI.
+
+        **The handle is an integer, not an object.** `qui` can hold a `ui.Item`
+        in Haxe because Silica items are visible to it; a WinRT control is not
+        visible to hxcpp at all. So the tree lives here, Haxe holds indices, and
+        the contract crosses the same way callbacks already do.
+
+        This file does not depend on the app, only on the vocabulary of node
+        types it knows how to build.
+    **/
+    static function generateNodeRuntime(outputDir:String):Void {
+        var header = '#pragma once
+#include "pch.h"
+
+// The six operations of nui.NodeSink, over integer handles.
+extern "C" int  wui_node_create(const char* type, int parent);
+extern "C" void wui_node_prop_string(int h, const char* type, const char* key, const char* value);
+extern "C" void wui_node_prop_int(int h, const char* type, const char* key, int value);
+extern "C" void wui_node_prop_float(int h, const char* type, const char* key, double value);
+extern "C" void wui_node_prop_bool(int h, const char* type, const char* key, bool value);
+extern "C" void wui_node_prop_callback(int h, const char* type, const char* key, int callbackId);
+extern "C" void wui_node_modifier(int h, const char* type, const char* modType, double f0, const char* s0);
+extern "C" void wui_node_insert(int parent, int child, int index);
+extern "C" void wui_node_remove(int parent, int child);
+extern "C" void wui_node_destroy(int h);
+
+namespace wui { namespace nodes {
+    // Handle 0 is the root the window mounts; Haxe inserts into it.
+    void reset(winrt::Microsoft::UI::Xaml::UIElement const& root);
+    winrt::Microsoft::UI::Xaml::UIElement rootElement();
+}}
+';
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiNodes.h"]), header);
+
+        var source = '#include "pch.h"
+#include "WuiNodes.h"
+#include "WuiRuntime.h"
+#include <vector>
+#include <string>
+
+namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
+namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
+
+// Implemented in the hxcpp library: a node property that is a handler crosses as
+// an id, never as a pointer -- the same rule as every other callback here.
+extern "C" void wui_bridge_invoke_node(int id);
+
+namespace {
+    // Index -> control. Handles are never reused: a stale handle then names a
+    // hole rather than someone elses control, which turns a use-after-destroy
+    // into a reported no-op instead of a wrong widget being poked.
+    std::vector<winrt_xaml::UIElement> g_nodes;
+
+    winrt_xaml::UIElement at(int h) {
+        if (h < 0 || h >= (int)g_nodes.size()) return nullptr;
+        return g_nodes[h];
+    }
+
+    int put(winrt_xaml::UIElement const& e) {
+        g_nodes.push_back(e);
+        return (int)g_nodes.size() - 1;
+    }
+}
+
+namespace wui { namespace nodes {
+    void reset(winrt_xaml::UIElement const& root) {
+        g_nodes.clear();
+        g_nodes.push_back(root);   // handle 0
+    }
+
+    winrt_xaml::UIElement rootElement() {
+        return g_nodes.empty() ? nullptr : g_nodes[0];
+    }
+}}
+
+extern "C" int wui_node_create(const char* type, int parent) {
+    std::string t(type);
+
+    // Materialise, and nothing else -- no properties, no children, no mounting.
+    // The contract is explicit about this, and WinUI can honour it: a control
+    // exists perfectly well before it has a parent, which is why insert is a
+    // real operation here and not the no-op it has to be on Silica.
+    if (t == "VStack" || t == "HStack" || t == "Stack") {
+        winrt_controls::StackPanel p;
+        p.Orientation(t == "HStack" ? winrt_controls::Orientation::Horizontal
+                                    : winrt_controls::Orientation::Vertical);
+        return put(p);
+    }
+    if (t == "Text" || t == "TextBlock") {
+        winrt_controls::TextBlock tb;
+        tb.VerticalAlignment(winrt_xaml::VerticalAlignment::Center);
+        return put(tb);
+    }
+    if (t == "Button") {
+        return put(winrt_controls::Button());
+    }
+    if (t == "TextBox") {
+        return put(winrt_controls::TextBox());
+    }
+
+    // An unknown type is shown, not swallowed: a tree that cannot render should
+    // say so on screen rather than leave a hole nobody can explain.
+    winrt_controls::TextBlock unknown;
+    unknown.Text(winrt::hstring(L"?" + wui::runtime::fromUtf8(type)));
+    return put(unknown);
+}
+
+extern "C" void wui_node_prop_string(int h, const char* type, const char* key, const char* value) {
+    auto e = at(h);
+    if (e == nullptr) return;
+    std::string k(key);
+    auto text = winrt::hstring(wui::runtime::fromUtf8(value));
+
+    if (k == "text") {
+        if (auto tb = e.try_as<winrt_controls::TextBlock>()) { tb.Text(text); return; }
+        if (auto b = e.try_as<winrt_controls::Button>()) { b.Content(winrt::box_value(text)); return; }
+        if (auto x = e.try_as<winrt_controls::TextBox>()) { x.Text(text); return; }
+    }
+    if (k == "label") {
+        if (auto b = e.try_as<winrt_controls::Button>()) { b.Content(winrt::box_value(text)); return; }
+    }
+    if (k == "placeholder") {
+        if (auto x = e.try_as<winrt_controls::TextBox>()) { x.PlaceholderText(text); return; }
+    }
+}
+
+extern "C" void wui_node_prop_int(int h, const char* type, const char* key, int value) {
+    wui_node_prop_float(h, type, key, (double)value);
+}
+
+extern "C" void wui_node_prop_float(int h, const char* type, const char* key, double value) {
+    auto e = at(h);
+    if (e == nullptr) return;
+    std::string k(key);
+
+    if (k == "spacing") {
+        if (auto p = e.try_as<winrt_controls::StackPanel>()) { p.Spacing(value); return; }
+    }
+    if (k == "width") {
+        if (auto f = e.try_as<winrt_xaml::FrameworkElement>()) { f.Width(value); return; }
+    }
+    if (k == "height") {
+        if (auto f = e.try_as<winrt_xaml::FrameworkElement>()) { f.Height(value); return; }
+    }
+}
+
+extern "C" void wui_node_prop_bool(int h, const char* type, const char* key, bool value) {
+    auto e = at(h);
+    if (e == nullptr) return;
+    std::string k(key);
+
+    if (k == "visible") {
+        e.Visibility(value ? winrt_xaml::Visibility::Visible : winrt_xaml::Visibility::Collapsed);
+        return;
+    }
+    if (k == "enabled") {
+        if (auto c = e.try_as<winrt_controls::Control>()) { c.IsEnabled(value); return; }
+    }
+}
+
+extern "C" void wui_node_prop_callback(int h, const char* type, const char* key, int callbackId) {
+    auto e = at(h);
+    if (e == nullptr) return;
+    std::string k(key);
+
+    if (k == "onClick") {
+        if (auto b = e.try_as<winrt_controls::Button>()) {
+            b.Click([callbackId](winrt::Windows::Foundation::IInspectable const&,
+                                 winrt_xaml::RoutedEventArgs const&) {
+                wui_bridge_invoke_node(callbackId);
+            });
+            return;
+        }
+    }
+}
+
+extern "C" void wui_node_modifier(int h, const char* type, const char* modType, double f0, const char* s0) {
+    auto e = at(h);
+    if (e == nullptr) return;
+    std::string m(modType);
+
+    if (m == "padding") {
+        if (auto c = e.try_as<winrt_controls::Control>()) { c.Padding(wui::runtime::uniformThickness(f0)); return; }
+        if (auto p = e.try_as<winrt_controls::StackPanel>()) { p.Padding(wui::runtime::uniformThickness(f0)); return; }
+    }
+    if (m == "margin") {
+        if (auto f = e.try_as<winrt_xaml::FrameworkElement>()) { f.Margin(wui::runtime::uniformThickness(f0)); return; }
+    }
+    if (m == "foregroundColor") {
+        if (auto tb = e.try_as<winrt_controls::TextBlock>()) {
+            tb.Foreground(wui::runtime::brushFromName(s0));
+            return;
+        }
+    }
+}
+
+extern "C" void wui_node_insert(int parent, int child, int index) {
+    auto p = at(parent);
+    auto c = at(child);
+    if (p == nullptr || c == nullptr) return;
+
+    auto panel = p.try_as<winrt_controls::Panel>();
+    if (panel == nullptr) return;
+
+    // WinUI can place a child at a chosen index. Silica cannot -- its
+    // positioners append -- which is why the contract keeps this parameter
+    // rather than dropping it for its first adopter.
+    uint32_t n = panel.Children().Size();
+    uint32_t i = index < 0 ? n : (uint32_t)index;
+    if (i > n) i = n;
+    panel.Children().InsertAt(i, c);
+}
+
+extern "C" void wui_node_remove(int parent, int child) {
+    auto p = at(parent);
+    auto c = at(child);
+    if (p == nullptr || c == nullptr) return;
+
+    auto panel = p.try_as<winrt_controls::Panel>();
+    if (panel == nullptr) return;
+
+    uint32_t index = 0;
+    if (panel.Children().IndexOf(c, index)) {
+        panel.Children().RemoveAt(index);
+    }
+}
+
+extern "C" void wui_node_destroy(int h) {
+    if (h <= 0 || h >= (int)g_nodes.size()) return;
+    // A real release, not a hide. Dropping the last reference is what frees a
+    // WinRT control, so clearing the slot destroys it -- unlike Silica, where
+    // destroy can only set visible = false and the item leaks.
+    g_nodes[h] = nullptr;
+}
+';
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiNodes.cpp"]), source);
     }
 
     static function generateAppHeader(appName:String, outputDir:String):Void {
@@ -216,6 +458,25 @@ namespace wui { namespace runtime {
     inline auto grayBrush()        { return colorBrush(128, 128, 128); }
     inline auto transparentBrush() { return colorBrush(0, 0, 0, 0); }
     inline auto accentBrush()      { return colorBrush(0, 120, 212); }
+
+    // Colours arrive from nui as names, because a node property is a string.
+    // An unknown name yields no brush rather than a guessed one: leaving the
+    // control its own colour beats inventing one, and cui made the same call
+    // when it chose to skip a hex colour rather than approximate it.
+    inline winrt::Microsoft::UI::Xaml::Media::SolidColorBrush brushFromName(const char* name) {
+        std::string n(name == nullptr ? "" : name);
+        if (n == "black")   return blackBrush();
+        if (n == "white")   return whiteBrush();
+        if (n == "red")     return redBrush();
+        if (n == "green")   return greenBrush();
+        if (n == "blue")    return blueBrush();
+        if (n == "yellow")  return yellowBrush();
+        if (n == "orange")  return orangeBrush();
+        if (n == "purple")  return purpleBrush();
+        if (n == "gray")    return grayBrush();
+        if (n == "accent")  return accentBrush();
+        return nullptr;
+    }
 
     // ---- Thickness / CornerRadius ----
 

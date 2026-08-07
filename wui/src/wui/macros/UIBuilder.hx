@@ -52,6 +52,9 @@ class UIBuilder {
      */
     public static var allStateNames:Array<String> = [];
 
+    /** True when the app is `@:nui`: the window is filled by the push contract. */
+    public static var pushMode:Bool = false;
+
     /**
      * List of {stateName, textVar} pairs for state-bound text controls.
      * The generated code will subscribe to state changes and update these.
@@ -237,6 +240,43 @@ namespace MainWindow {
         var bodyStr = "";
         for (line in bodyLines) {
             bodyStr += indent + line + "\n";
+        }
+
+        // In push mode nothing below is generated from the tree: the window gets
+        // an empty root, and `wui.nui.Mount` fills it through the sink. The two
+        // paths do not mix -- an app is either transpiled or driven.
+        if (pushMode) {
+            var pushSource = '#include "pch.h"
+#include "MainWindow.h"
+#include "WuiNodes.h"
+#include "WuiRuntime.h"
+
+namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
+namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
+
+// Implemented in the hxcpp library: mounts the Haxe node tree into handle 0.
+extern "C" void wui_bridge_render_nui();
+
+namespace MainWindow {
+
+winrt_xaml::UIElement BuildUI(winrt_xaml::Window const& window)
+{
+    wui::runtime::dispatcherQueue = window.DispatcherQueue();
+
+    // Handle 0 is this panel. Everything Haxe creates is inserted into it.
+    winrt_controls::StackPanel root;
+    root.Orientation(winrt_controls::Orientation::Vertical);
+    wui::nodes::reset(root);
+
+    wui_bridge_render_nui();
+
+    return root;
+}
+
+} // namespace MainWindow
+';
+            ProjectGenerator.writeIfChanged(Path.join([outputDir, "MainWindow.cpp"]), pushSource);
+            return;
         }
 
         var sourceContent = '#include "pch.h"

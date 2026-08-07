@@ -166,6 +166,19 @@ extern "C" void wui_bridge_refresh_lists() {
     ::wui::bridge::HaxeBridge_obj::refreshLists();
 }
 
+// Mount the Haxe node tree into handle 0, which BuildUI has just registered.
+extern "C" void wui_bridge_render_nui() {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::HaxeBridge_obj::renderNui();
+}
+
+// A node property handler, from the nui push contract. A third entry point for
+// a third id range -- see Callbacks.
+extern "C" void wui_bridge_invoke_node(int id) {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::Callbacks_obj::invokeNode(id);
+}
+
 // A row button. Separate from wui_bridge_invoke because row ids are rebuilt on
 // every list change while the other table is fixed at compile time -- one entry
 // point for each keeps a stale row click from running an unrelated closure.
@@ -213,6 +226,7 @@ class HaxeBridge {
 			trace('[wui] install: could not instantiate $appClass');
 			return 0;
 		}
+		appInstance = app;
 
 		var root:View = app.body();
 		if (root == null) {
@@ -225,6 +239,9 @@ class HaxeBridge {
 		bindStates();
 		return Callbacks.count();
 	}
+
+	/** The app built by `install()`. `renderNui` mounts from this same object. **/
+	static var appInstance:Dynamic = null;
 
 	/** Every `ListView` found in the tree, with the state that feeds it. **/
 	static var lists:Array<{stateName:String, state:Dynamic, template:Dynamic}> = [];
@@ -407,6 +424,39 @@ class HaxeBridge {
 		}
 
 		return bound;
+	}
+
+	/**
+		Mount the app's node tree through the push contract.
+
+		Called once, from `BuildUI`, after the root panel exists — the ordering
+		lesson from W5b, where a list pushed before its control existed went
+		nowhere. The app supplies its tree through `nuiBody()`.
+	**/
+	public static function renderNui():Void {
+		Callbacks.resetNodes();
+
+		if (appInstance == null) {
+			trace("[wui] renderNui: no app instance; install() has not run");
+			return;
+		}
+
+		var node:nui.Node = null;
+		try {
+			node = appInstance.nuiBody();
+		} catch (e:Dynamic) {
+			trace('[wui] renderNui: the app has no nuiBody() ($e)');
+			return;
+		}
+
+		if (node == null) {
+			trace("[wui] renderNui: nuiBody() returned null");
+			return;
+		}
+
+		var sink = new wui.nui.WinUISink();
+		wui.nui.Mount.tree(sink, node, 0);
+		trace('[wui] nui: arbre monté, ${Callbacks.nodeCount()} gestionnaire(s)');
 	}
 
 	/** Hand one integer to the generated C++, which owns `s_<name>`. **/
