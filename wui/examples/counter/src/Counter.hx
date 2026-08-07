@@ -5,12 +5,14 @@ import wui.ui.Text;
 import wui.ui.Button;
 import wui.state.StateAction;
 import wui.ui.Spacer;
+import wui.ui.TextBox;
 import wui.modifiers.ViewModifier.FontStyle;
 import wui.modifiers.ViewModifier.ColorValue;
 import wui.modifiers.ViewModifier.HorizontalAlign;
 
 class Counter extends wui.App {
     @:state var count:Int = 0;
+    @:state var label:String = "";
 
     static function main() {}
 
@@ -62,6 +64,18 @@ class Counter extends wui.App {
             // W4 : `Custom` transportait déjà du code arbitraire dans l'enum, mais
             // le traducteur ne le connaissait pas et le bouton perdait simplement
             // son gestionnaire, sans un mot. Interprété à l'exécution, il marche.
+            // W5a : un état String, dans les deux sens.
+            //
+            // Le TextBox écrit vers Haxe par `applyExternal` — les effets sans
+            // écho vers la plateforme — sinon chaque frappe réécrirait le champ
+            // en cours d'édition et déplacerait le curseur. Le bouton ci-dessous
+            // écrit dans l'autre sens, et le champ doit suivre.
+            new TextBox("Tapez ici...", label).padding(),
+            new Text("Texte Haxe : " + label).padding(),
+            new Button("Haxe écrit le texte").onClick(() -> {
+                label.value = "écrit depuis Haxe (" + count.value + ")";
+                trace('[wui] label = ${label.value}');
+            }).padding(),
             new Button("Custom ×2", null, Custom(() -> {
                 count.value = count.value * 2;
                 trace('[wui] Custom : count = ${count.value}');

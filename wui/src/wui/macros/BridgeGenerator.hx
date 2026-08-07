@@ -166,6 +166,33 @@ namespace wui { namespace runtime {
     inline winrt::hstring toHString(double value) { return winrt::hstring(std::to_wstring(value)); }
     inline winrt::hstring toHString(bool value) { return winrt::hstring(value ? L"true" : L"false"); }
 
+    // ---- UTF-8 <-> UTF-16, for text crossing the Haxe bridge ----
+    //
+    // Haxe strings are UTF-8 and WinUI wants UTF-16, so every string that crosses
+    // is converted here rather than at each call site. Going through the Win32
+    // functions rather than std::codecvt, which is deprecated and was never right
+    // about surrogate pairs -- an emoji in a text box is enough to show it.
+
+    inline std::wstring fromUtf8(const char* s) {
+        if (s == nullptr || *s == 0) return std::wstring();
+        int len = ::MultiByteToWideChar(CP_UTF8, 0, s, -1, nullptr, 0);
+        if (len <= 1) return std::wstring();
+        std::wstring out(static_cast<size_t>(len - 1), static_cast<wchar_t>(0));
+        ::MultiByteToWideChar(CP_UTF8, 0, s, -1, &out[0], len);
+        return out;
+    }
+
+    inline std::string toUtf8(const std::wstring& s) {
+        if (s.empty()) return std::string();
+        int len = ::WideCharToMultiByte(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
+                                        nullptr, 0, nullptr, nullptr);
+        if (len <= 0) return std::string();
+        std::string out(static_cast<size_t>(len), 0);
+        ::WideCharToMultiByte(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
+                              &out[0], len, nullptr, nullptr);
+        return out;
+    }
+
     // ---- State Change Notification (placeholder for debugging) ----
 
     inline void onStateChanged(const char* name, const char* value) {}

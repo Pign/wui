@@ -162,6 +162,7 @@ class WinUIGenerator {
      */
     static function collectStateFields(type:Type):Array<{name:String, type:String, initial:String}> {
         var result:Array<{name:String, type:String, initial:String}> = [];
+        UIBuilder.allStateNames = [];
         switch (type) {
             case TInst(ref, _):
                 var cls = ref.get();
@@ -171,8 +172,15 @@ class WinUIGenerator {
                         case TInst(tref, params):
                             var typeName = tref.get().name;
                             if (typeName == "State" && params.length > 0) {
-                                var cppType = "int"; // default
-                                var initial = "0";
+                                // Only the types that have a C++ static here. An
+                                // unmapped one used to fall back to `int`, which
+                                // declared `static int s_todos = 0` for an array
+                                // state -- a static nothing writes, next to a
+                                // notify nothing calls. A state whose home is
+                                // elsewhere (a list is rebuilt by Haxe) should
+                                // produce nothing rather than a plausible lie.
+                                var cppType:String = null;
+                                var initial:String = null;
                                 switch (params[0]) {
                                     case TAbstract(aref, _):
                                         var aname = aref.get().name;
@@ -183,7 +191,19 @@ class WinUIGenerator {
                                         if (sref.get().name == "String") { cppType = "std::wstring"; initial = 'L""'; }
                                     default:
                                 }
-                                result.push({ name: field.name, type: cppType, initial: initial });
+                                // Two different questions, and they had one
+                                // answer between them until a list broke:
+                                //
+                                //  - which states get a C++ static?  (typed ones)
+                                //  - which names ARE states?         (all of them)
+                                //
+                                // Restricting the first list to mappable types
+                                // silently un-recognised `todos` as a state, so
+                                // the ListView bound to nothing at all.
+                                UIBuilder.allStateNames.push(field.name);
+                                if (cppType != null) {
+                                    result.push({ name: field.name, type: cppType, initial: initial });
+                                }
                             }
                         default:
                     }
@@ -420,6 +440,17 @@ class WinUIGenerator {
                     props.set("hasHaxeCallback", true);
                 }
                 { viewType: "Button", children: [], modifiers: [], properties: props };
+
+            case "wui.ui.ListView":
+                // Only the bound state's name is taken here. The rows are Haxe's
+                // business: the generator cannot know how many there will be, so
+                // it emits an empty control and the runtime fills it.
+                var props:Map<String, Dynamic> = new Map();
+                if (args.length > 0) {
+                    var stateRef = deepExtractStateRef(args[0]);
+                    if (stateRef != null) props.set("boundState", stateRef);
+                }
+                { viewType: "ListView", children: [], modifiers: [], properties: props };
 
             case "wui.ui.Spacer":
                 var props:Map<String, Dynamic> = new Map();
@@ -725,8 +756,8 @@ class WinUIGenerator {
                 if (fieldName == "value") return extractStateFieldRef(obj);
                 // Direct field reference (this.count)
                 if (fieldName != null) {
-                    for (sf in UIBuilder.stateFields) {
-                        if (fieldName == sf.name) return sf.name;
+                    for (sf in UIBuilder.allStateNames) {
+                        if (fieldName == sf) return sf;
                     }
                 }
                 return null;
@@ -736,8 +767,8 @@ class WinUIGenerator {
                 var resolved = localExprs.get(v.name);
                 if (resolved != null) return extractStateFieldRef(resolved);
                 // Check against state fields
-                for (sf in UIBuilder.stateFields) {
-                    if (v.name == sf.name) return sf.name;
+                for (sf in UIBuilder.allStateNames) {
+                    if (v.name == sf) return sf;
                 }
                 return null;
 
@@ -766,8 +797,8 @@ class WinUIGenerator {
         switch (expr.expr) {
             case TLocal(v):
                 // Check if local name matches a state field
-                for (sf in UIBuilder.stateFields) {
-                    if (v.name == sf.name) return sf.name;
+                for (sf in UIBuilder.allStateNames) {
+                    if (v.name == sf) return sf;
                 }
                 var resolved = localExprs.get(v.name);
                 if (resolved != null) return deepExtractStateRef(resolved);
@@ -791,8 +822,8 @@ class WinUIGenerator {
                     default: null;
                 };
                 if (fName != null) {
-                    for (sf in UIBuilder.stateFields) {
-                        if (fName == sf.name) return sf.name;
+                    for (sf in UIBuilder.allStateNames) {
+                        if (fName == sf) return sf;
                     }
                 }
                 return deepExtractStateRef(obj);

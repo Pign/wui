@@ -1,0 +1,8 @@
+# Exercises the acceptance app without a window: install it, drive its buttons
+# through the callback registry, and check the list rebuilds.
+-cp src
+-cp test
+-cp ../../src
+-lib rui
+-main TodoCheck
+-cpp build/test

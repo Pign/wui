@@ -29,17 +29,26 @@ package wui.bridge;
 
 	## Status
 
-	**W1, W2 and W3 done, all verified on Windows by clicking.** MSVC links the
-	hxcpp library, `OnLaunched` boots it, a button whose action is a Haxe closure
-	runs that closure, and a Haxe write to `@:state` reaches the controls.
+	**W1 through W5 done, all verified on Windows by clicking.** MSVC links the
+	hxcpp library, `OnLaunched` boots it, buttons run real closures, Haxe state
+	drives the controls both ways, and the acceptance app — the to-do list the
+	design note called structurally impossible — runs.
 
-	Both directions therefore work: C++ -> Haxe through `wui_bridge_invoke`,
-	Haxe -> C++ through `wui_bridge_push_int`.
+	This class is the whole crossing:
 
-	What is left: the generator still translates `StateAction`s into C++ that
-	mutates `s_<name>` behind Haxe's back — so both paths hold a value and they
-	drift if mixed — and it still guesses an action from a button's label when
-	none is given. W4 removes both. See `wui-hxcpp.md` in the atelier repo.
+	| Direction | Entry point |
+	|---|---|
+	| boot | `wui_bridge_init` |
+	| C++ -> Haxe, a click | `wui_bridge_invoke` / `wui_bridge_invoke_row` |
+	| C++ -> Haxe, a keystroke | `wui_bridge_external_string` (no echo back) |
+	| Haxe -> C++, state | `wui_bridge_push_int` / `wui_bridge_push_string` |
+	| Haxe -> C++, list rows | `wui_bridge_push_list` |
+
+	**Known limits.** Only `Int` and `String` states reach the controls; other
+	types are reported, not silently dropped. A list row is read as one text and
+	at most one button — enough for a to-do list, and not a general `ForEach`.
+	The general answer is the `nui` push contract, which is its own chantier.
+	See `wui-hxcpp.md` in the atelier repo.
 **/
 #if cpp
 @:cppFileCode('
@@ -110,6 +119,60 @@ extern "C" void wui_bridge_set_int_handler(wui_int_handler fn) {
 extern "C" void wui_bridge_push_int(const char* name, int value) {
     if (s_wui_int_handler) s_wui_int_handler(name, value);
 }
+
+// Same slot, for text. Strings cross as UTF-8; the handler widens them.
+typedef void (*wui_string_handler)(const char*, const char*);
+static wui_string_handler s_wui_string_handler = nullptr;
+
+extern "C" void wui_bridge_set_string_handler(wui_string_handler fn) {
+    s_wui_string_handler = fn;
+}
+
+extern "C" void wui_bridge_push_string(const char* name, const char* value) {
+    if (s_wui_string_handler) s_wui_string_handler(name, value);
+}
+
+// ---- the other direction: the user typed something ----
+//
+// A TextBox edit originates on the platform, so it must reach Haxe *without*
+// being pushed straight back -- that echo would fight the caret on every
+// keystroke. `rui.state.State.applyExternal` exists for exactly this: it runs
+// the effects and skips the platform sink.
+extern "C" void wui_bridge_external_string(const char* name, const char* value) {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::HaxeBridge_obj::applyExternalString(::String(name), ::String(value));
+}
+
+// ---- list rows ----
+//
+// The rows arrive as one flat payload: records separated by 0x1e, fields within
+// a record by 0x1f. ASCII has had those two separators since before anyone
+// needed a JSON parser, and a button label cannot contain them.
+typedef void (*wui_list_handler)(const char*, const char*);
+static wui_list_handler s_wui_list_handler = nullptr;
+
+extern "C" void wui_bridge_set_list_handler(wui_list_handler fn) {
+    s_wui_list_handler = fn;
+}
+
+extern "C" void wui_bridge_push_list(const char* name, const char* payload) {
+    if (s_wui_list_handler) s_wui_list_handler(name, payload);
+}
+
+// Called at the end of BuildUI, once the ListViews exist and the handler is
+// registered. Without it, rows present before the window was built are lost.
+extern "C" void wui_bridge_refresh_lists() {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::HaxeBridge_obj::refreshLists();
+}
+
+// A row button. Separate from wui_bridge_invoke because row ids are rebuilt on
+// every list change while the other table is fixed at compile time -- one entry
+// point for each keeps a stale row click from running an unrelated closure.
+extern "C" void wui_bridge_invoke_row(int id) {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::Callbacks_obj::invokeRow(id);
+}
 ')
 #end
 @:keep
@@ -158,8 +221,149 @@ class HaxeBridge {
 		}
 
 		collect(root);
+		bindLists(root);
 		bindStates();
 		return Callbacks.count();
+	}
+
+	/** Every `ListView` found in the tree, with the state that feeds it. **/
+	static var lists:Array<{stateName:String, state:Dynamic, template:Dynamic}> = [];
+
+	/**
+		Find the lists and make them rebuild when their state changes.
+
+		A list is the one place the generator cannot pre-emit: it does not know
+		how many rows there will be. So Haxe keeps the item template, runs it on
+		each element, and pushes the resulting rows across — the generated C++
+		empties its `ListView` and refills it.
+
+		**This is not a general `ForEach`.** A row is read as *one text and at
+		most one button*, which is what a to-do list needs and no more. The
+		general answer is the `nui` push contract, where Haxe holds the tree and
+		patches native nodes; that is its own piece of work, not this one.
+	**/
+	static function bindLists(root:View):Void {
+		lists = [];
+		findLists(root);
+
+		for (entry in lists) {
+			var st:Dynamic = entry.state;
+			st.subscribe(function(_) rebuildList(entry));
+			rebuildList(entry);
+		}
+	}
+
+	/**
+		Push every list again.
+
+		Called from the end of `BuildUI`. `install()` runs first — before the
+		window exists — so the rebuild it does lands on a ListView that is still
+		null, with no handler registered yet. An app whose list starts empty never
+		notices; one with initial rows would show none of them, and only the first
+		Add would make the list appear.
+	**/
+	public static function refreshLists():Void {
+		for (entry in lists) rebuildList(entry);
+	}
+
+	static function findLists(view:View):Void {
+		if (view == null) return;
+
+		if (view.viewType == "ListView") {
+			var items:Dynamic = view.properties.get("items");
+			var template:Dynamic = view.properties.get("itemTemplate");
+
+			if (items != null && Reflect.isFunction(template)) {
+				// Typed access, not `items.name`: `name` is a `(get, never)`
+				// property, and reading one through Dynamic does not call its
+				// getter on hxcpp -- it fails, the way `.value` does. The cast
+				// costs nothing and makes the getter run.
+				var bound:rui.state.State<Dynamic> = cast items;
+				var name:String = bound == null ? null : bound.name;
+
+				if (name != null) {
+					lists.push({stateName: name, state: items, template: template});
+				} else {
+					trace("[wui] a ListView is bound to something that is not a named State");
+				}
+			}
+		}
+
+		for (child in view.children) findLists(child);
+	}
+
+	/**
+		Run the template over the current items and hand the rows to native code.
+
+		Row callbacks are re-registered from scratch here, which is why they live
+		in their own numbering — see `Callbacks`.
+	**/
+	static function rebuildList(entry:{stateName:String, state:Dynamic, template:Dynamic}):Void {
+		Callbacks.resetRows();
+
+		var items:Array<Dynamic> = entry.state.peek();
+		if (items == null) items = [];
+
+		var rows:Array<String> = [];
+		for (item in items) {
+			var view:View = Reflect.callMethod(null, entry.template, [item]);
+			var text = firstText(view);
+			var button = firstButton(view);
+
+			var actionLabel = "";
+			var actionId = -1;
+			if (button != null) {
+				actionLabel = Std.string(button.properties.get("label"));
+				var cb = button.properties.get("onClick");
+				var action = button.properties.get("action");
+				if (Reflect.isFunction(cb)) {
+					actionId = Callbacks.registerRow(cb);
+				} else if (action != null) {
+					actionId = Callbacks.registerRow(function() Actions.run(action));
+				}
+			}
+
+			rows.push(text + FIELD + actionLabel + FIELD + actionId);
+		}
+
+		pushList(entry.stateName, rows.join(RECORD));
+	}
+
+	// Separators chosen because no label can contain them: ASCII 30 and 31 exist
+	// for exactly this, which saves writing a JSON parser on the C++ side.
+	static inline var RECORD = "\x1e";
+	static inline var FIELD = "\x1f";
+
+	/** First `Text` in a row, depth-first. Empty when the row has none. **/
+	static function firstText(view:View):String {
+		if (view == null) return "";
+		if (view.viewType == "TextBlock" || view.viewType == "Text") {
+			var t = view.properties.get("text");
+			if (t != null) return Std.string(t);
+		}
+		for (child in view.children) {
+			var found = firstText(child);
+			if (found != "") return found;
+		}
+		return "";
+	}
+
+	/** First `Button` in a row, depth-first. **/
+	static function firstButton(view:View):View {
+		if (view == null) return null;
+		if (view.viewType == "Button") return view;
+		for (child in view.children) {
+			var found = firstButton(child);
+			if (found != null) return found;
+		}
+		return null;
+	}
+
+	/** Hand the rows to the generated C++, which owns the ListView. **/
+	static function pushList(name:String, payload:String):Void {
+		#if cpp
+		untyped __cpp__("wui_bridge_push_list({0}.utf8_str(), {1}.utf8_str())", name, payload);
+		#end
 	}
 
 	/**
@@ -188,8 +392,17 @@ class HaxeBridge {
 					pushInt(name, cast(v, Int));
 				});
 				bound++;
+			} else if (Std.isOfType(current, String)) {
+				st.subscribe(function(v:Dynamic) {
+					pushString(name, v == null ? "" : Std.string(v));
+				});
+				bound++;
 			} else {
-				trace('[wui] state "$name": only Int reaches the UI so far, not pushing');
+				// Arrays are not pushed as values: a ListView bound to one is
+				// rebuilt by `bindLists` instead. Anything else is a real gap.
+				if (!Std.isOfType(current, Array)) {
+					trace('[wui] state "$name": ${Type.typeof(current)} does not reach the UI yet, not pushing');
+				}
 			}
 		}
 
@@ -201,6 +414,30 @@ class HaxeBridge {
 		#if cpp
 		untyped __cpp__("wui_bridge_push_int({0}.utf8_str(), {1})", name, value);
 		#end
+	}
+
+	/** Same, for text. UTF-8 both ways; the C++ side widens. **/
+	static function pushString(name:String, value:String):Void {
+		#if cpp
+		untyped __cpp__("wui_bridge_push_string({0}.utf8_str(), {1}.utf8_str())", name, value);
+		#end
+	}
+
+	/**
+		Record a change the platform made, without pushing it back.
+
+		Called when the user edits a `TextBox`. `applyExternal` runs the effects
+		and **skips the platform sink**, so the value does not travel back to the
+		control it just came from — which on every keystroke would rewrite the text
+		mid-edit and move the caret.
+	**/
+	public static function applyExternalString(name:String, value:String):Void {
+		var st:Dynamic = wui.state.State.getByName(name);
+		if (st == null) {
+			trace('[wui] external change for unknown state "$name"');
+			return;
+		}
+		st.applyExternal(value);
 	}
 
 	/**

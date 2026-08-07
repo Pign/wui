@@ -108,6 +108,12 @@ class CallbackOrder {
 				case "Haxe +10":
 					check('id $id — closure writes the state', after == before + 10,
 						'$before -> $after');
+				case "Haxe écrit le texte":
+					// W5a from the button side: a closure writing a String state.
+					var text:Dynamic = wui.state.State.getByName("label");
+					check('id $id — closure writes a String state',
+						StringTools.startsWith(text.peek(), "écrit depuis Haxe"),
+						'label = "${text.peek()}"');
 				case "Custom ×2":
 					// The one the translator dropped in silence.
 					check('id $id — StateAction Custom runs at all', after == before * 2,
@@ -138,6 +144,34 @@ class CallbackOrder {
 		seen = [];
 		state.set(4242);
 		check("an unchanged write notifies nobody", seen.length == 0, 'received $seen');
+
+		// --- W5a: text state, and the echo that must not happen ---
+		var label:Dynamic = wui.state.State.getByName("label");
+		check("the String @:state registered itself", label != null);
+
+		var pushed:Array<String> = [];
+		label.subscribe(function(v:Dynamic) pushed.push(Std.string(v)));
+
+		// A Haxe write must reach the platform: that is what moves the control.
+		label.set("depuis Haxe");
+		check("a Haxe write to a String state notifies the sink",
+			pushed.length == 1 && pushed[0] == "depuis Haxe", 'received $pushed');
+
+		// A platform-originated change must NOT. `bindStates` puts the native
+		// pusher on this very list, so a notification here would be an echo back
+		// into the TextBox the text came from -- rewriting it mid-edit and moving
+		// the caret. `applyExternal` is what makes the difference.
+		pushed = [];
+		HaxeBridge.applyExternalString("label", "tapé par l'utilisateur");
+		check("an external change updates the Haxe value",
+			(label.peek() : String) == "tapé par l'utilisateur", 'got ${label.peek()}');
+		check("an external change does NOT echo to the platform",
+			pushed.length == 0, 'echoed $pushed');
+
+		// An unknown name must not throw: the generated C++ names the state, and a
+		// rename on one side should report, not crash the app on a keystroke.
+		HaxeBridge.applyExternalString("pasUnEtat", "x");
+		check("an external change for an unknown state is survivable", true);
 
 		// --- an id nobody assigned must not run anything ---
 		Counter.last = null;

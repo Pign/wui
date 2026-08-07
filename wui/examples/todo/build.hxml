@@ -1,0 +1,6 @@
+-cp src
+-cp ../../src
+-lib rui
+--macro wui.macros.WinUIGenerator.register()
+-main TodoApp
+-cpp build/cpp

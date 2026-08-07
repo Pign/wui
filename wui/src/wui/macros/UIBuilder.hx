@@ -43,14 +43,28 @@ class UIBuilder {
     public static var stateFields:Array<{name:String, type:String, initial:String}> = [];
 
     /**
+     * Every `@:state` field name, including the ones with no C++ static.
+     *
+     * `stateFields` answers "which states get a static here"; this answers "which
+     * names are states at all". They were the same list until an array state --
+     * which has no static, because Haxe rebuilds its list -- stopped being
+     * recognised as a state and its ListView bound to nothing.
+     */
+    public static var allStateNames:Array<String> = [];
+
+    /**
      * List of {stateName, textVar} pairs for state-bound text controls.
      * The generated code will subscribe to state changes and update these.
      */
     static var stateBindings:Array<{stateName:String, controlVar:String, format:String}> = [];
 
+    /** ListViews found in the tree, keyed by the state that feeds them. */
+    static var listViews:Array<{stateName:String, controlVar:String}> = [];
+
     public static function generateMainWindow(viewTree:ViewNode, outputDir:String):Void {
         reset();
         stateBindings = [];
+        listViews = [];
 
         var bodyLines:Array<String> = [];
         var rootVar = generateNode(viewTree, bodyLines, 1);
@@ -98,8 +112,27 @@ namespace MainWindow {
         for (sf in intStates) {
             applyIntBody += '        if (n == "${sf.name}") { s_${sf.name} = value; notify_${sf.name}(); return; }\n';
         }
+        var stringStates = [for (sf in stateFields) if (sf.type == "std::wstring") sf];
+        var applyStringBody = "";
+        for (sf in stringStates) {
+            applyStringBody += '        if (n == "${sf.name}") { s_${sf.name} = w; notify_${sf.name}(); return; }\n';
+        }
+        var applyStringFunc = "";
+        if (stringStates.length > 0) {
+            applyStringFunc = '    static void ApplyStringState(const char* name, const char* value) {\n'
+                + '        std::string n(name);\n'
+                + '        std::wstring w = wui::runtime::fromUtf8(value);\n'
+                + '        wui::runtime::runOnUIThread([n, w]() {\n'
+                + applyStringBody
+                + '        });\n'
+                + '    }\n';
+        }
+
         var applyIntFunc = "";
         var registerHandler = "";
+        if (stringStates.length > 0) {
+            registerHandler += '    wui_bridge_set_string_handler(&ApplyStringState);\n';
+        }
         if (intStates.length > 0) {
             applyIntFunc = '    static void ApplyIntState(const char* name, int value) {\n'
                 + '        std::string n(name);\n'
@@ -108,8 +141,87 @@ namespace MainWindow {
                 + applyIntBody
                 + '        });\n'
                 + '    }\n';
-            registerHandler = '    wui_bridge_set_int_handler(&ApplyIntState);\n';
+            registerHandler += '    wui_bridge_set_int_handler(&ApplyIntState);\n';
         }
+
+        // ---- lists ----
+        //
+        // One static ListView per bound state, plus the rebuilder. Rows arrive as
+        // a flat payload (0x1e between rows, 0x1f between fields) because writing
+        // a JSON parser here to carry three fields would be its own liability.
+        var listDecls = "";
+        var applyListBody = "";
+        for (lv in listViews) {
+            listDecls += '    static winrt_controls::ListView s_list_${lv.stateName}{nullptr};\n';
+            applyListBody += '        if (n == "${lv.stateName}") { RebuildList(s_list_${lv.stateName}, payload); return; }\n';
+        }
+
+        var listHelpers = "";
+        var registerListHandler = "";
+        if (listViews.length > 0) {
+            listHelpers = '    static void RebuildList(winrt_controls::ListView const& list, const char* payload) {\n'
+                + '        if (list == nullptr) return;\n'
+                + '        std::string all(payload);\n'
+                + '        std::vector<std::string> rows;\n'
+                + '        size_t start = 0;\n'
+                + '        while (start <= all.size()) {\n'
+                + '            size_t stop = all.find((char)30, start);\n'
+                + '            if (stop == std::string::npos) { if (start < all.size()) rows.push_back(all.substr(start)); break; }\n'
+                + '            rows.push_back(all.substr(start, stop - start));\n'
+                + '            start = stop + 1;\n'
+                + '        }\n'
+                + '\n'
+                + '        list.Items().Clear();\n'
+                + '        for (auto const& row : rows) {\n'
+                + '            std::vector<std::string> f;\n'
+                + '            size_t p = 0;\n'
+                + '            while (true) {\n'
+                + '                size_t q = row.find((char)31, p);\n'
+                + '                if (q == std::string::npos) { f.push_back(row.substr(p)); break; }\n'
+                + '                f.push_back(row.substr(p, q - p));\n'
+                + '                p = q + 1;\n'
+                + '            }\n'
+                + '            if (f.size() < 3) continue;\n'
+                + '\n'
+                + '            winrt_controls::StackPanel line;\n'
+                + '            line.Orientation(winrt_controls::Orientation::Horizontal);\n'
+                + '            line.Spacing(8);\n'
+                + '\n'
+                + '            winrt_controls::TextBlock caption;\n'
+                + '            caption.Text(winrt::hstring(wui::runtime::fromUtf8(f[0].c_str())));\n'
+                + '            caption.VerticalAlignment(winrt_xaml::VerticalAlignment::Center);\n'
+                + '            line.Children().Append(caption);\n'
+                + '\n'
+                + '            int rowId = std::atoi(f[2].c_str());\n'
+                + '            if (!f[1].empty() && rowId >= 0) {\n'
+                + '                winrt_controls::Button act;\n'
+                + '                act.Content(winrt::box_value(winrt::hstring(wui::runtime::fromUtf8(f[1].c_str()))));\n'
+                + '                // rowId is captured by value: the row it names is gone the\n'
+                + '                // moment the list rebuilds, and Callbacks.invokeRow reports a\n'
+                + '                // stale id rather than running someone else\'s closure.\n'
+                + '                act.Click([rowId](winrt::Windows::Foundation::IInspectable const&, winrt_xaml::RoutedEventArgs const&) {\n'
+                + '                    wui_bridge_invoke_row(rowId);\n'
+                + '                });\n'
+                + '                line.Children().Append(act);\n'
+                + '            }\n'
+                + '\n'
+                + '            list.Items().Append(line);\n'
+                + '        }\n'
+                + '    }\n'
+                + '\n'
+                + '    static void ApplyListState(const char* name, const char* payload) {\n'
+                + '        std::string n(name);\n'
+                + '        std::string copy(payload);\n'
+                + '        wui::runtime::runOnUIThread([n, copy]() {\n'
+                + '            const char* payload = copy.c_str();\n'
+                + applyListBody
+                + '        });\n'
+                + '    }\n';
+            registerListHandler = '    wui_bridge_set_list_handler(&ApplyListState);\n';
+        }
+        // The lists exist only now; ask Haxe for their rows again.
+        var refreshLists = listViews.length > 0 ? "    wui_bridge_refresh_lists();" : "";
+        registerHandler += registerListHandler;
 
         // Build state binding subscriptions
         var subscriptionLines = "";
@@ -131,12 +243,18 @@ namespace MainWindow {
 #include "MainWindow.h"
 #include <vector>
 #include <string>
+#include <cstdlib>
 
 // Implemented in the hxcpp library (wui.bridge.HaxeBridge). Declared rather
 // than included: this file must keep compiling when no Haxe closure is used,
 // and hxcpp headers have no business in the UI translation unit.
 extern "C" void wui_bridge_invoke(int id);
 extern "C" void wui_bridge_set_int_handler(void (*fn)(const char*, int));
+extern "C" void wui_bridge_set_string_handler(void (*fn)(const char*, const char*));
+extern "C" void wui_bridge_external_string(const char* name, const char* value);
+extern "C" void wui_bridge_set_list_handler(void (*fn)(const char*, const char*));
+extern "C" void wui_bridge_invoke_row(int id);
+extern "C" void wui_bridge_refresh_lists();
 
 namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
@@ -150,8 +268,12 @@ $stateDecls
 $subscriberDecls
     // ---- Notify helpers ----
 $notifyFuncs
+    // ---- lists Haxe rebuilds ----
+$listDecls
     // ---- Haxe state -> these statics ----
 $applyIntFunc
+$applyStringFunc
+$listHelpers
 winrt_xaml::UIElement BuildUI(winrt_xaml::Window const& window)
 {
     // Store dispatcher for thread-safe UI updates
@@ -161,6 +283,7 @@ $registerHandler
 $bodyStr
     // ---- State bindings ----
 $subscriptionLines
+$refreshLists
     return $rootVar;
 }
 
@@ -186,6 +309,7 @@ $subscriptionLines
             case "ScrollViewer": generateScrollViewer(node, lines, depth);
             case "CheckBox": generateCheckBox(node, lines, depth);
             case "ProgressRing": generateProgressRing(node, lines, depth);
+            case "ListView": generateListView(node, lines, depth);
             case "Spacer": generateSpacer(node, lines, depth);
             default: generateGenericControl(node, lines, depth);
         };
@@ -312,6 +436,27 @@ $subscriptionLines
         return varName;
     }
 
+    /**
+     * A list whose rows Haxe builds.
+     *
+     * The generator cannot pre-emit rows -- it does not know how many there will
+     * be -- so it emits an empty ListView, remembers it under the bound state's
+     * name, and lets `ApplyListState` refill it whenever Haxe pushes.
+     */
+    static function generateListView(node:ViewNode, lines:Array<String>, depth:Int):String {
+        var varName = nextVar("list");
+        lines.push('winrt_controls::ListView $varName;');
+
+        var stateName = node.properties.get("boundState");
+        if (stateName != null) {
+            listViews.push({stateName: Std.string(stateName), controlVar: varName});
+            lines.push('s_list_${stateName} = $varName;');
+        }
+
+        applyModifiers(varName, "ListView", node.modifiers, lines);
+        return varName;
+    }
+
     static function generateTextBox(node:ViewNode, lines:Array<String>, depth:Int):String {
         var varName = nextVar("textBox");
         lines.push('winrt_controls::TextBox $varName;');
@@ -333,6 +478,10 @@ $subscriptionLines
             lines.push('    auto h = sender.as<winrt_controls::TextBox>().Text();');
             lines.push('    s_$stateName = std::wstring(h.c_str(), h.size());');
             lines.push('    notify_$stateName();');
+            lines.push('    // Tell Haxe, without letting it push the value back into the');
+            lines.push('    // box being typed in. The static above is a mirror, not a');
+            lines.push('    // second owner: applyExternal leaves both sides agreeing.');
+            lines.push('    wui_bridge_external_string("$stateName", wui::runtime::toUtf8(s_$stateName).c_str());');
             lines.push('});');
             // State → TextBox
             stateBindings.push({

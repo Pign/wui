@@ -58,4 +58,46 @@ class Callbacks {
 		}
 		handlers[id]();
 	}
+
+	// ---- list rows: a separate, deliberately short-lived numbering ----
+	//
+	// Row callbacks are rebuilt every time the list changes, so their ids cannot
+	// live in the table above: appending to it on each rebuild would grow it
+	// without bound, and renumbering it would break the compile-time agreement
+	// that table rests on. Rows get their own range, cleared on every rebuild,
+	// and native code reaches them through a different entry point so the two
+	// can never be confused for one another.
+
+	static var rowHandlers:Array<Void->Void> = [];
+
+	/** Drop the previous rows' callbacks. Called before each rebuild. **/
+	public static function resetRows():Void {
+		rowHandlers = [];
+	}
+
+	/** Add a row's callback and return the id for this rebuild only. **/
+	public static function registerRow(fn:Void->Void):Int {
+		rowHandlers.push(fn);
+		return rowHandlers.length - 1;
+	}
+
+	/** How many row callbacks the current rebuild registered. **/
+	public static function rowCount():Int {
+		return rowHandlers.length;
+	}
+
+	/**
+		Run a row's callback.
+
+		A stale id — a click landing after a rebuild replaced the rows — is
+		reported and ignored rather than throwing: the window is small but real,
+		and killing the app over a late click would be worse than dropping it.
+	**/
+	public static function invokeRow(id:Int):Void {
+		if (id < 0 || id >= rowHandlers.length) {
+			trace('[wui] no row callback for id $id (${rowHandlers.length} rows)');
+			return;
+		}
+		rowHandlers[id]();
+	}
 }

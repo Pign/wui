@@ -107,6 +107,25 @@ class Build {
         // Step 3: MSBuild
         Sys.println("[3/3] Building WinUI application...");
         var vcxproj = Path.join([winuiDir, '${wuiConfig.appName}.vcxproj']);
+
+        // Two places name the app and they must agree. The generator names its
+        // files after the App *class*; this looks them up under `appName` from
+        // wui.json. When they differ, MSBuild says only "MSB1009: Project file
+        // does not exist", which names neither side of the disagreement.
+        if (!FileSystem.exists(vcxproj)) {
+            Sys.println('Error: ${wuiConfig.appName}.vcxproj was not generated.');
+            var generated = [];
+            if (FileSystem.exists(winuiDir)) {
+                for (entry in FileSystem.readDirectory(winuiDir)) {
+                    if (StringTools.endsWith(entry, ".vcxproj")) generated.push(entry);
+                }
+            }
+            if (generated.length > 0) {
+                Sys.println('  Found instead: ${generated.join(", ")}');
+                Sys.println('  wui.json says appName "${wuiConfig.appName}"; the generator uses the App class name.');
+            }
+            Sys.exit(1);
+        }
         var msbuildResult = runCommand(cwd, msbuildPath, [
             vcxproj,
             '-p:Configuration=$config',
