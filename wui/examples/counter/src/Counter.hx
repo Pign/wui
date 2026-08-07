@@ -37,13 +37,13 @@ class Counter extends wui.App {
         plus.padding = 12;
 
         var a = new Button("Haxe A");
-        a.onClick(() -> report("A"));
+        a.onClick = () -> report("A");
         a.padding = 12;
         var b = new Button("Haxe B");
-        b.onClick(() -> report("B"));
+        b.onClick = () -> report("B");
         b.padding = 12;
         var c = new Button("Haxe C");
-        c.onClick(() -> report("C"));
+        c.onClick = () -> report("C");
         c.padding = 12;
 
         var field = new TextBox("Tapez ici...", label);
@@ -52,10 +52,10 @@ class Counter extends wui.App {
         echo.padding = 12;
 
         var writer = new Button("Haxe écrit le texte");
-        writer.onClick(() -> {
+        writer.onClick = () -> {
             label.value = "écrit depuis Haxe (" + count.value + ")";
             trace('[wui] label = ${label.value}');
-        });
+        };
         writer.padding = 12;
 
         var custom = new Button("Custom ×2", null, Custom(() -> {

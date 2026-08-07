@@ -37,251 +37,198 @@ class BridgeGenerator {
 
         This file does not depend on the app, only on the vocabulary of node
         types it knows how to build.
+    /**
+        Emit the node runtime: a handle table and the six operations of
+        `nui.NodeSink`, implemented against WinUI.
+
+        **The switch is generated, not written.** It used to be a hand-kept list
+        of `if (t == "Text")` branches under a comment asking whoever touched it
+        to keep it in step with `Vocabulary` -- the fourth copy of one truth, and
+        the last. It is built from the controls now: a class carrying
+        `@:winuiType` is a node type, its `@:winrt` vars are its properties, and
+        their declared defaults are applied at creation.
+
+        **The handle is an integer, not an object.** `qui` holds a `ui.Item` in
+        Haxe because Silica items are visible to it; a WinRT control is not
+        visible to hxcpp at all. So the tree lives here and Haxe holds indices,
+        the same way callbacks already cross.
     **/
     static function generateNodeRuntime(outputDir:String):Void {
-        var header = '#pragma once
-#include "pch.h"
+        var header = new StringBuf();
+        header.add("#pragma once\n#include \"pch.h\"\n\n");
+        header.add("// The six operations of nui.NodeSink, over integer handles.\n");
+        header.add("extern \"C\" int  wui_node_create(const char* type, int parent);\n");
+        header.add("extern \"C\" void wui_node_prop_string(int h, const char* type, const char* key, const char* value);\n");
+        header.add("extern \"C\" void wui_node_prop_int(int h, const char* type, const char* key, int value);\n");
+        header.add("extern \"C\" void wui_node_prop_float(int h, const char* type, const char* key, double value);\n");
+        header.add("extern \"C\" void wui_node_prop_bool(int h, const char* type, const char* key, bool value);\n");
+        header.add("extern \"C\" void wui_node_prop_callback(int h, const char* type, const char* key, int callbackId);\n");
+        header.add("extern \"C\" void wui_node_modifier(int h, const char* type, const char* modType, double f0, const char* s0);\n");
+        header.add("extern \"C\" void wui_node_insert(int parent, int child, int index);\n");
+        header.add("extern \"C\" void wui_node_remove(int parent, int child);\n");
+        header.add("extern \"C\" void wui_node_destroy(int h);\n\n");
+        header.add("namespace wui { namespace nodes {\n");
+        header.add("    // Handle 0 is the root the window mounts; Haxe inserts into it.\n");
+        header.add("    void reset(winrt::Microsoft::UI::Xaml::UIElement const& root);\n");
+        header.add("    winrt::Microsoft::UI::Xaml::UIElement rootElement();\n}}\n");
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiNodes.h"]), header.toString());
 
-// The six operations of nui.NodeSink, over integer handles.
-extern "C" int  wui_node_create(const char* type, int parent);
-extern "C" void wui_node_prop_string(int h, const char* type, const char* key, const char* value);
-extern "C" void wui_node_prop_int(int h, const char* type, const char* key, int value);
-extern "C" void wui_node_prop_float(int h, const char* type, const char* key, double value);
-extern "C" void wui_node_prop_bool(int h, const char* type, const char* key, bool value);
-extern "C" void wui_node_prop_callback(int h, const char* type, const char* key, int callbackId);
-extern "C" void wui_node_modifier(int h, const char* type, const char* modType, double f0, const char* s0);
-extern "C" void wui_node_insert(int parent, int child, int index);
-extern "C" void wui_node_remove(int parent, int child);
-extern "C" void wui_node_destroy(int h);
+        var src = new StringBuf();
+        src.add("#include \"pch.h\"\n#include \"WuiNodes.h\"\n#include \"WuiRuntime.h\"\n");
+        src.add("#include <vector>\n#include <string>\n\n");
+        src.add("namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;\n");
+        src.add("namespace winrt_xaml = winrt::Microsoft::UI::Xaml;\n\n");
+        src.add("// Implemented in the hxcpp library: a node property that is a handler crosses\n");
+        src.add("// as an id, never as a pointer -- the same rule as every other callback here.\n");
+        src.add("extern \"C\" void wui_bridge_invoke_node(int id);\n\n");
 
-namespace wui { namespace nodes {
-    // Handle 0 is the root the window mounts; Haxe inserts into it.
-    void reset(winrt::Microsoft::UI::Xaml::UIElement const& root);
-    winrt::Microsoft::UI::Xaml::UIElement rootElement();
-}}
-';
-        ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiNodes.h"]), header);
+        src.add("namespace {\n");
+        src.add("    // Index -> control. Handles are never reused: a stale one then names a hole\n");
+        src.add("    // rather than someone elses control, so a use-after-destroy is a reported\n");
+        src.add("    // no-op instead of a wrong widget being poked.\n");
+        src.add("    std::vector<winrt_xaml::UIElement> g_nodes;\n\n");
+        src.add("    // One Click subscription per node, so applying onClick again REPLACES it.\n");
+        src.add("    // WinUI events accumulate, and a re-render hands fresh closures that can\n");
+        src.add("    // never compare equal, so without revoking first one click fires n+1 times.\n");
+        src.add("    std::vector<winrt::event_token> g_clickTokens;\n\n");
+        src.add("    winrt_xaml::UIElement at(int h) {\n");
+        src.add("        if (h < 0 || h >= (int)g_nodes.size()) return nullptr;\n");
+        src.add("        return g_nodes[h];\n    }\n\n");
+        src.add("    int put(winrt_xaml::UIElement const& e) {\n");
+        src.add("        g_nodes.push_back(e);\n        g_clickTokens.push_back(winrt::event_token{});\n");
+        src.add("        return (int)g_nodes.size() - 1;\n    }\n}\n\n");
 
-        var source = '#include "pch.h"
-#include "WuiNodes.h"
-#include "WuiRuntime.h"
-#include <vector>
-#include <string>
+        src.add("namespace wui { namespace nodes {\n");
+        src.add("    void reset(winrt_xaml::UIElement const& root) {\n");
+        src.add("        g_nodes.clear();\n        g_clickTokens.clear();\n");
+        src.add("        g_nodes.push_back(root);\n        g_clickTokens.push_back(winrt::event_token{});\n    }\n\n");
+        src.add("    winrt_xaml::UIElement rootElement() {\n");
+        src.add("        return g_nodes.empty() ? nullptr : g_nodes[0];\n    }\n}}\n\n");
 
-namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
-namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
+        // ---- create, from the declarations ----
+        src.add("extern \"C\" int wui_node_create(const char* type, int parent) {\n");
+        src.add("    std::string t(type);\n\n");
+        src.add("    // Materialise, and nothing else -- no children, no mounting. WinUI can\n");
+        src.add("    // honour that: a control exists before it has a parent, which is why\n");
+        src.add("    // insert is a real operation here and not the no-op Silica forces.\n");
+        for (type in wui.nui.Vocabulary.types()) {
+            var winui = wui.nui.Vocabulary.winuiFor(type);
+            if (winui == null) continue;
 
-// Implemented in the hxcpp library: a node property that is a handler crosses as
-// an id, never as a pointer -- the same rule as every other callback here.
-extern "C" void wui_bridge_invoke_node(int id);
-
-namespace {
-    // Index -> control. Handles are never reused: a stale handle then names a
-    // hole rather than someone elses control, which turns a use-after-destroy
-    // into a reported no-op instead of a wrong widget being poked.
-    std::vector<winrt_xaml::UIElement> g_nodes;
-
-    // One Click subscription per node, so applying onClick again REPLACES it.
-    //
-    // WinUI events accumulate: Click(handler) adds a subscriber, it does not
-    // set one. A re-render hands fresh closures every time -- comparing them by
-    // reference can never call them equal -- so without revoking first, every
-    // render leaves another live handler behind and one click fires n+1 times.
-    // "Apply this property" has to mean apply, not append.
-    std::vector<winrt::event_token> g_clickTokens;
-
-    winrt_xaml::UIElement at(int h) {
-        if (h < 0 || h >= (int)g_nodes.size()) return nullptr;
-        return g_nodes[h];
-    }
-
-    int put(winrt_xaml::UIElement const& e) {
-        g_nodes.push_back(e);
-        g_clickTokens.push_back(winrt::event_token{});
-        return (int)g_nodes.size() - 1;
-    }
-}
-
-namespace wui { namespace nodes {
-    void reset(winrt_xaml::UIElement const& root) {
-        g_nodes.clear();
-        g_clickTokens.clear();
-        g_nodes.push_back(root);   // handle 0
-        g_clickTokens.push_back(winrt::event_token{});
-    }
-
-    winrt_xaml::UIElement rootElement() {
-        return g_nodes.empty() ? nullptr : g_nodes[0];
-    }
-}}
-
-extern "C" int wui_node_create(const char* type, int parent) {
-    std::string t(type);
-
-    // Materialise, and nothing else -- no properties, no children, no mounting.
-    // The contract is explicit about this, and WinUI can honour it: a control
-    // exists perfectly well before it has a parent, which is why insert is a
-    // real operation here and not the no-op it has to be on Silica.
-    if (t == "VStack" || t == "HStack" || t == "Stack") {
-        winrt_controls::StackPanel p;
-        p.Orientation(t == "HStack" ? winrt_controls::Orientation::Horizontal
-                                    : winrt_controls::Orientation::Vertical);
-        return put(p);
-    }
-    if (t == "Text" || t == "TextBlock") {
-        winrt_controls::TextBlock tb;
-        tb.VerticalAlignment(winrt_xaml::VerticalAlignment::Center);
-        return put(tb);
-    }
-    if (t == "Button") {
-        return put(winrt_controls::Button());
-    }
-    if (t == "TextBox") {
-        return put(winrt_controls::TextBox());
-    }
-
-    // An unknown type is shown, not swallowed: a tree that cannot render should
-    // say so on screen rather than leave a hole nobody can explain.
-    winrt_controls::TextBlock unknown;
-    unknown.Text(winrt::hstring(L"?" + wui::runtime::fromUtf8(type)));
-    return put(unknown);
-}
-
-extern "C" void wui_node_prop_string(int h, const char* type, const char* key, const char* value) {
-    auto e = at(h);
-    if (e == nullptr) return;
-    std::string k(key);
-    auto text = winrt::hstring(wui::runtime::fromUtf8(value));
-
-    if (k == "text") {
-        if (auto tb = e.try_as<winrt_controls::TextBlock>()) { tb.Text(text); return; }
-        if (auto b = e.try_as<winrt_controls::Button>()) { b.Content(winrt::box_value(text)); return; }
-        if (auto x = e.try_as<winrt_controls::TextBox>()) { x.Text(text); return; }
-    }
-    if (k == "label") {
-        if (auto b = e.try_as<winrt_controls::Button>()) { b.Content(winrt::box_value(text)); return; }
-    }
-    if (k == "placeholder") {
-        if (auto x = e.try_as<winrt_controls::TextBox>()) { x.PlaceholderText(text); return; }
-    }
-}
-
-extern "C" void wui_node_prop_int(int h, const char* type, const char* key, int value) {
-    wui_node_prop_float(h, type, key, (double)value);
-}
-
-extern "C" void wui_node_prop_float(int h, const char* type, const char* key, double value) {
-    auto e = at(h);
-    if (e == nullptr) return;
-    std::string k(key);
-
-    if (k == "spacing") {
-        if (auto p = e.try_as<winrt_controls::StackPanel>()) { p.Spacing(value); return; }
-    }
-    if (k == "width") {
-        if (auto f = e.try_as<winrt_xaml::FrameworkElement>()) { f.Width(value); return; }
-    }
-    if (k == "height") {
-        if (auto f = e.try_as<winrt_xaml::FrameworkElement>()) { f.Height(value); return; }
-    }
-}
-
-extern "C" void wui_node_prop_bool(int h, const char* type, const char* key, bool value) {
-    auto e = at(h);
-    if (e == nullptr) return;
-    std::string k(key);
-
-    if (k == "visible") {
-        e.Visibility(value ? winrt_xaml::Visibility::Visible : winrt_xaml::Visibility::Collapsed);
-        return;
-    }
-    if (k == "enabled") {
-        if (auto c = e.try_as<winrt_controls::Control>()) { c.IsEnabled(value); return; }
-    }
-}
-
-extern "C" void wui_node_prop_callback(int h, const char* type, const char* key, int callbackId) {
-    auto e = at(h);
-    if (e == nullptr) return;
-    std::string k(key);
-
-    if (k == "onClick") {
-        if (auto b = e.try_as<winrt_controls::Button>()) {
-            // Revoke the previous subscription before adding the new one.
-            if (g_clickTokens[h].value != 0) {
-                b.Click(g_clickTokens[h]);
-                g_clickTokens[h] = winrt::event_token{};
+            src.add("    if (t == \"" + type + "\") {\n");
+            src.add("        winrt_controls::" + winui + " c;\n");
+            for (entry in wui.nui.Vocabulary.defaultsFor(type)) {
+                var literal = entry.kind == "KString" ? "\"" + entry.value + "\"" : entry.value;
+                var call = nodeSetter(entry.winrt, entry.kind, literal, literal);
+                if (call != null) src.add("        c." + call + ";\n");
             }
-            g_clickTokens[h] = b.Click([callbackId](winrt::Windows::Foundation::IInspectable const&,
-                                                   winrt_xaml::RoutedEventArgs const&) {
-                wui_bridge_invoke_node(callbackId);
-            });
-            return;
+            src.add("        return put(c);\n    }\n");
         }
-    }
-}
+        src.add("\n    // An unknown type is shown, not swallowed: a tree that cannot render\n");
+        src.add("    // should say so rather than leave a hole nobody can explain.\n");
+        src.add("    winrt_controls::TextBlock unknown;\n");
+        src.add("    unknown.Text(winrt::hstring(L\"?\" + wui::runtime::fromUtf8(type)));\n");
+        src.add("    return put(unknown);\n}\n\n");
 
-extern "C" void wui_node_modifier(int h, const char* type, const char* modType, double f0, const char* s0) {
-    auto e = at(h);
-    if (e == nullptr) return;
-    std::string m(modType);
+        // ---- one setter function per kind, branches from the declarations ----
+        for (kind in ["KString", "KInt", "KFloat", "KBool"]) {
+            var fn = switch (kind) {
+                case "KString": "string"; case "KInt": "int";
+                case "KFloat": "float"; case _: "bool";
+            };
+            var cty = switch (kind) {
+                case "KString": "const char*"; case "KInt": "int";
+                case "KFloat": "double"; case _: "bool";
+            };
+            src.add("extern \"C\" void wui_node_prop_" + fn + "(int h, const char* type, const char* key, " + cty + " value) {\n");
+            src.add("    auto e = at(h);\n    if (e == nullptr) return;\n");
+            src.add("    std::string t(type);\n    std::string k(key);\n");
+            if (kind == "KString") src.add("    auto text = winrt::hstring(wui::runtime::fromUtf8(value));\n");
+            src.add("\n");
 
-    if (m == "padding") {
-        if (auto c = e.try_as<winrt_controls::Control>()) { c.Padding(wui::runtime::uniformThickness(f0)); return; }
-        if (auto p = e.try_as<winrt_controls::StackPanel>()) { p.Padding(wui::runtime::uniformThickness(f0)); return; }
-    }
-    if (m == "margin") {
-        if (auto f = e.try_as<winrt_xaml::FrameworkElement>()) { f.Margin(wui::runtime::uniformThickness(f0)); return; }
-    }
-    if (m == "foregroundColor") {
-        if (auto tb = e.try_as<winrt_controls::TextBlock>()) {
-            tb.Foreground(wui::runtime::brushFromName(s0));
-            return;
+            for (type in wui.nui.Vocabulary.types()) {
+                var winui = wui.nui.Vocabulary.winuiFor(type);
+                if (winui == null) continue;
+
+                for (entry in wui.nui.Vocabulary.propsFor(type)) {
+                    if (entry.kind != kind) continue;
+                    var call = nodeSetter(entry.winrt, kind, "text", "value");
+                    if (call == null) continue;
+
+                    src.add("    if (t == \"" + type + "\" && k == \"" + entry.name + "\") {\n");
+                    src.add("        if (auto c = e.try_as<winrt_controls::" + winui + ">()) { c." + call + "; }\n");
+                    src.add("        return;\n    }\n");
+                }
+            }
+            src.add("}\n\n");
         }
+
+        // ---- the rest: unchanged, and not derivable ----
+        src.add("extern \"C\" void wui_node_prop_callback(int h, const char* type, const char* key, int callbackId) {\n");
+        src.add("    auto e = at(h);\n    if (e == nullptr) return;\n");
+        src.add("    if (std::string(key) != \"onClick\") return;\n");
+        src.add("    if (auto b = e.try_as<winrt_controls::Button>()) {\n");
+        src.add("        if (g_clickTokens[h].value != 0) { b.Click(g_clickTokens[h]); }\n");
+        src.add("        g_clickTokens[h] = b.Click([callbackId](winrt::Windows::Foundation::IInspectable const&,\n");
+        src.add("                                               winrt_xaml::RoutedEventArgs const&) {\n");
+        src.add("            wui_bridge_invoke_node(callbackId);\n        });\n    }\n}\n\n");
+
+        src.add("extern \"C\" void wui_node_modifier(int h, const char* type, const char* modType, double f0, const char* s0) {\n");
+        src.add("    // nui keeps an ordered modifier chain; wui has no such concept any more --\n");
+        src.add("    // everything it used to carry is a declared property. Kept so the contract\n");
+        src.add("    // is implemented, and reported rather than silently ignored.\n");
+        src.add("    (void)h; (void)type; (void)f0; (void)s0;\n");
+        src.add("    OutputDebugStringA(\"[wui] modifier ignored: wui has properties, not modifiers\\n\");\n}\n\n");
+
+        src.add("extern \"C\" void wui_node_insert(int parent, int child, int index) {\n");
+        src.add("    auto p = at(parent);\n    auto c = at(child);\n");
+        src.add("    if (p == nullptr || c == nullptr) return;\n");
+        src.add("    auto panel = p.try_as<winrt_controls::Panel>();\n");
+        src.add("    if (panel == nullptr) return;\n\n");
+        src.add("    // WinUI can place a child at a chosen index. Silica cannot -- its\n");
+        src.add("    // positioners append -- which is why the contract keeps this parameter\n");
+        src.add("    // rather than dropping it for its first adopter.\n");
+        src.add("    uint32_t n = panel.Children().Size();\n");
+        src.add("    uint32_t i = index < 0 ? n : (uint32_t)index;\n");
+        src.add("    if (i > n) i = n;\n    panel.Children().InsertAt(i, c);\n}\n\n");
+
+        src.add("extern \"C\" void wui_node_remove(int parent, int child) {\n");
+        src.add("    auto p = at(parent);\n    auto c = at(child);\n");
+        src.add("    if (p == nullptr || c == nullptr) return;\n");
+        src.add("    auto panel = p.try_as<winrt_controls::Panel>();\n");
+        src.add("    if (panel == nullptr) return;\n\n");
+        src.add("    uint32_t index = 0;\n");
+        src.add("    if (panel.Children().IndexOf(c, index)) { panel.Children().RemoveAt(index); }\n}\n\n");
+
+        src.add("extern \"C\" void wui_node_destroy(int h) {\n");
+        src.add("    if (h <= 0 || h >= (int)g_nodes.size()) return;\n");
+        src.add("    // A real release, not a hide. Dropping the last reference frees a WinRT\n");
+        src.add("    // control -- unlike Silica, where destroy can only set visible = false.\n");
+        src.add("    g_clickTokens[h] = winrt::event_token{};\n");
+        src.add("    g_nodes[h] = nullptr;\n}\n");
+
+        ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiNodes.cpp"]), src.toString());
     }
-}
 
-extern "C" void wui_node_insert(int parent, int child, int index) {
-    auto p = at(parent);
-    auto c = at(child);
-    if (p == nullptr || c == nullptr) return;
-
-    auto panel = p.try_as<winrt_controls::Panel>();
-    if (panel == nullptr) return;
-
-    // WinUI can place a child at a chosen index. Silica cannot -- its
-    // positioners append -- which is why the contract keeps this parameter
-    // rather than dropping it for its first adopter.
-    uint32_t n = panel.Children().Size();
-    uint32_t i = index < 0 ? n : (uint32_t)index;
-    if (i > n) i = n;
-    panel.Children().InsertAt(i, c);
-}
-
-extern "C" void wui_node_remove(int parent, int child) {
-    auto p = at(parent);
-    auto c = at(child);
-    if (p == nullptr || c == nullptr) return;
-
-    auto panel = p.try_as<winrt_controls::Panel>();
-    if (panel == nullptr) return;
-
-    uint32_t index = 0;
-    if (panel.Children().IndexOf(c, index)) {
-        panel.Children().RemoveAt(index);
-    }
-}
-
-extern "C" void wui_node_destroy(int h) {
-    if (h <= 0 || h >= (int)g_nodes.size()) return;
-    g_clickTokens[h] = winrt::event_token{};
-    // A real release, not a hide. Dropping the last reference is what frees a
-    // WinRT control, so clearing the slot destroys it -- unlike Silica, where
-    // destroy can only set visible = false and the item leaks.
-    g_nodes[h] = nullptr;
-}
-';
-        ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiNodes.cpp"]), source);
+    /**
+        The WinRT call for one property, or `null` when the node path cannot make
+        it yet -- reported by its absence rather than emitted wrong.
+    **/
+    static function nodeSetter(member:String, kind:String, textExpr:String, valueExpr:String):Null<String> {
+        return switch (member) {
+            case "Foreground" | "Background" | "BorderBrush":
+                member + "(wui::runtime::brushFromName(" + valueExpr + "))";
+            case "Orientation":
+                member + "(std::string(" + valueExpr + ") == \"Horizontal\" ? winrt_controls::Orientation::Horizontal : winrt_controls::Orientation::Vertical)";
+            case "Content":
+                member + "(winrt::box_value(" + textExpr + "))";
+            case "Visibility":
+                member + "(" + valueExpr + " ? winrt_xaml::Visibility::Visible : winrt_xaml::Visibility::Collapsed)";
+            case "HorizontalAlignment" | "VerticalAlignment" | "Style" | "FontWeight" | "FontStyle":
+                null;
+            case _:
+                kind == "KString" ? member + "(" + textExpr + ")" : member + "(" + valueExpr + ")";
+        };
     }
 
     static function generateAppHeader(appName:String, outputDir:String):Void {

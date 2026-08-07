@@ -69,7 +69,7 @@ class TodoApp extends wui.App {
 			new HStack([
 				new TextBox("New item...", newItemText),
 				// The closure the transpiler could never carry.
-				new Button("Add").onClick(function() {
+				new Button("Add").onClick = function() {
 					var title = newItemText.value;
 					if (title == "") return;
 
@@ -87,7 +87,7 @@ class TodoApp extends wui.App {
 				var mark = todo.completed ? "[x] " : "[ ] ";
 				return new HStack([
 					new Text(mark + todo.title),
-					new Button(todo.completed ? "Undo" : "Done").onClick(function() {
+					new Button(todo.completed ? "Undo" : "Done").onClick = function() {
 						todo.completed = !todo.completed;
 						// Re-assign so the write is seen: the array is the same
 						// object, and its identity is what `set` compares.

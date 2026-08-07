@@ -12,6 +12,7 @@ import wui.View;
  *   ], 8)
  */
 @:winuiType("StackPanel")
+@:build(wui.macros.ControlBuilder.build())
 class VStack extends Stack {
 	// Declared with its default, so the generated `create` applies it: both
 	// stacks are a StackPanel and only this tells them apart.

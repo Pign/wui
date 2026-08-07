@@ -133,6 +133,64 @@ class Vocabulary {
 		return found;
 	}
 
+	/** The WinUI control a node type maps to. **/
+	public static function winuiFor(type:String):Null<String> {
+		var cls = classOf(type);
+		return cls == null ? null : winuiNameOf(cls);
+	}
+
+	/** Every declared property of a type, with its kind and WinRT member. **/
+	public static function propsFor(type:String):Array<{name:String, kind:String, winrt:String}> {
+		var out = [];
+		var cls = classOf(type);
+		if (cls == null) return out;
+
+		eachProp(cls, function(field, kind) {
+			var meta = field.meta.extract(":winrt");
+			if (meta.length == 0 || meta[0].params.length == 0) return;
+			switch (meta[0].params[0].expr) {
+				case EConst(CString(member, _)):
+					out.push({name: field.name, kind: kind, winrt: member});
+				case _:
+			}
+		});
+		return out;
+	}
+
+	/**
+		Properties carrying a declared default, for the generated `create`.
+
+		This is what lets `VStack` and `HStack` be generated at all: both are a
+		StackPanel and only `orientation` tells them apart, so the default has to
+		be applied at creation rather than hardcoded in a switch.
+	**/
+	public static function defaultsFor(type:String):Array<{winrt:String, kind:String, value:String}> {
+		var out = [];
+		var cls = classOf(type);
+		if (cls == null) return out;
+
+		eachProp(cls, function(field, kind) {
+			var winrt = field.meta.extract(":winrt");
+			var def = field.meta.extract(":defaultValue");
+			if (winrt.length == 0 || def.length == 0) return;
+			if (winrt[0].params.length == 0 || def[0].params.length == 0) return;
+
+			var member = switch (winrt[0].params[0].expr) {
+				case EConst(CString(v, _)): v;
+				case _: null;
+			};
+			var value = switch (def[0].params[0].expr) {
+				case EConst(CString(v, _)): v;
+				case EConst(CInt(v)): v;
+				case EConst(CFloat(v)): v;
+				case EConst(CIdent(v)) if (v == "true" || v == "false"): v;
+				case _: null;
+			};
+			if (member != null && value != null) out.push({winrt: member, kind: kind, value: value});
+		});
+		return out;
+	}
+
 	/** Every known type, sorted, for an error message that helps. **/
 	public static function types():Array<String> {
 		var out = [for (t in all().keys()) t];

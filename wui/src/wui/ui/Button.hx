@@ -17,16 +17,14 @@ class Button extends View {
 	@:winrt("Content")
 	public var text:String;
 
+	/** The handler. A var like any other property -- see `View`. **/
+	@:winrt("Click")
+	public var onClick:Null<Void->Void>;
+
 	public function new(label:String, ?icon:Dynamic, ?action:StateAction) {
 		super("Button");
 		this.text = label;
 		if (icon != null) properties.set("icon", icon);
 		if (action != null) properties.set("action", action);
-	}
-
-	/** Set a Haxe closure instead of a StateAction. **/
-	public function onClick(callback:() -> Void):Button {
-		properties.set("onClick", callback);
-		return cast this;
 	}
 }
