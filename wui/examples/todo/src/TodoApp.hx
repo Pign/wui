@@ -49,7 +49,7 @@ class TodoItem {
 // far from the cause.
 @:keep
 class TodoApp extends wui.App {
-	@:state var todos:Array<TodoItem> = [];
+	@:state var todos:rui.structures.ImmutableList<TodoItem> = new rui.structures.ImmutableList();
 	@:state var newItemText:String = "";
 
 	static function main() {}
@@ -77,10 +77,12 @@ class TodoApp extends wui.App {
 			var title = newItemText.value;
 			if (title == "") return;
 
-			// A new array, not a push: `rui.state.State.set` compares
-			// against the value it holds, so mutating in place would read
-			// as an unchanged write and notify nobody.
-			todos.value = todos.value.concat([new TodoItem(title, false)]);
+			// `push` returns a NEW list -- the point of the structure. With an
+			// Array this had to be written as a concat under a comment
+			// explaining why, and nothing stopped the next reader writing
+			// `push` and losing the notification. Now the obvious call is the
+			// correct one.
+			todos.value = todos.value.push(new TodoItem(title, false));
 			newItemText.value = "";
 			trace('[todo] ajouté : $title (${todos.value.length} au total)');
 		};
@@ -95,9 +97,11 @@ class TodoApp extends wui.App {
 			var toggle = new Button(todo.completed ? "Undo" : "Done");
 			toggle.onClick = function() {
 				todo.completed = !todo.completed;
-				// Re-assign so the write is seen: the array is the same
-				// object, and its identity is what `set` compares.
-				todos.value = todos.value.copy();
+				// The item mutated in place, so the list is still the same value
+				// and `set` would see no change. Rebuilding it makes the write
+				// visible -- and an immutable *item* would not need this either,
+				// which is the next step the rule points at.
+				todos.value = todos.value.map(function(t) return t);
 				trace('[todo] ${todo.title} -> ${todo.completed}');
 			};
 			return new HStack([caption, toggle], 8);

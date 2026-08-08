@@ -318,8 +318,15 @@ class HaxeBridge {
 	static function rebuildList(entry:{stateName:String, state:Dynamic, template:Dynamic}):Void {
 		Callbacks.resetRows();
 
-		var items:Array<Dynamic> = entry.state.peek();
-		if (items == null) items = [];
+		// Any iterable collection, not only Array. A list state is meant to hold
+		// an ImmutableList -- whose `push` returns a new list, so a change is a
+		// new value the state can notice, rather than a mutation nobody sees.
+		var raw:Dynamic = entry.state.peek();
+		var items:Array<Dynamic> = [];
+		if (raw != null) {
+			if (Std.isOfType(raw, Array)) items = raw;
+			else for (item in (raw : Iterable<Dynamic>)) items.push(item);
+		}
 
 		var rows:Array<String> = [];
 		for (item in items) {
@@ -415,9 +422,9 @@ class HaxeBridge {
 				});
 				bound++;
 			} else {
-				// Arrays are not pushed as values: a ListView bound to one is
-				// rebuilt by `bindLists` instead. Anything else is a real gap.
-				if (!Std.isOfType(current, Array)) {
+				// A collection is not pushed as a value: a ListView bound to one
+				// is rebuilt by `bindLists`. Anything else is a real gap.
+				if (!isCollection(current)) {
 					trace('[wui] state "$name": ${Type.typeof(current)} does not reach the UI yet, not pushing');
 				}
 			}
@@ -506,6 +513,13 @@ class HaxeBridge {
 	static var nuiReconciler:wui.nui.Reconciler<Int> = null;
 	static var nuiTree:wui.nui.Mounted<Int> = null;
 	static var nuiEffect:rui.Signal.Effect = null;
+
+	/** Arrays and the persistent structures a list state is meant to hold. **/
+	static function isCollection(v:Dynamic):Bool {
+		if (v == null) return false;
+		if (Std.isOfType(v, Array)) return true;
+		return Std.isOfType(v, rui.structures.ImmutableList);
+	}
 
 	/** Hand one integer to the generated C++, which owns `s_<name>`. **/
 	static function pushInt(name:String, value:Int):Void {

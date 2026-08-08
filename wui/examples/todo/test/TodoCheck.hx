@@ -23,11 +23,25 @@ class TodoCheck {
 		}
 	}
 
+	/**
+		The list, as a plain array to assert against.
+
+		The state holds an `ImmutableList` now -- a structure whose `push`
+		returns a new list, so a change is a new value the state can notice
+		rather than a mutation nobody sees. Reading it as an `Array` returned
+		null and made a passing test report zero items.
+	**/
 	static function todos():Array<Dynamic> {
 		var st:Dynamic = wui.state.State.getByName("todos");
 		if (st == null) return null;
-		var v:Array<Dynamic> = st.peek();
-		return v == null ? [] : v;
+
+		var raw:Dynamic = st.peek();
+		if (raw == null) return [];
+		if (Std.isOfType(raw, Array)) return raw;
+
+		var out:Array<Dynamic> = [];
+		for (item in (raw : Iterable<Dynamic>)) out.push(item);
+		return out;
 	}
 
 	static function main() {
