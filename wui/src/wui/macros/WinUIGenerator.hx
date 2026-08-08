@@ -105,8 +105,18 @@ class WinUIGenerator {
 
         // An app marked @:nui renders through the push contract instead of the
         // generated UI: the window gets an empty root and Haxe mounts into it.
+        // Metadata is not inherited in Haxe, and the app a user writes extends
+        // `mui.App`, which is what carries `@:nui`. Walk the chain, or the mui
+        // end of the chain silently falls back to the transpiled path.
         var pushMode = switch (appType) {
-            case TInst(ref, _): ref.get().meta.has(":nui");
+            case TInst(ref, _):
+                var cls = ref.get();
+                var found = false;
+                while (cls != null && !found) {
+                    found = cls.meta.has(":nui");
+                    cls = cls.superClass == null ? null : cls.superClass.t.get();
+                }
+                found;
             case _: false;
         };
         UIBuilder.pushMode = pushMode;
