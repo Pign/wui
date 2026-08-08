@@ -13,9 +13,13 @@ class FormDemo extends wui.App {
     }
 
     override function body():View {
+        // Statement style: the macro follows what is done to a local after its
+        // declaration, and a property assignment is a statement, not a chain.
+        var heading = new Text("Settings");
+        heading.font = "Title";
+
         return new VStack([
-            new Text("Settings")
-                .font = "Title",
+            heading,
             new TextBox("Enter your name...", name),
             new Text("Hello, " + name)
         ]);

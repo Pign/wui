@@ -118,7 +118,10 @@ class BridgeGenerator {
             src.add("    if (t == \"" + type + "\") {\n");
             src.add("        winrt_controls::" + winui + " c;\n");
             for (entry in wui.nui.Vocabulary.defaultsFor(type)) {
-                var literal = entry.kind == "KString" ? "\"" + entry.value + "\"" : entry.value;
+                // Escaped like every other splice: a declared default is still
+                // a string landing inside a C++ literal.
+                var literal = entry.kind == "KString"
+                    ? "\"" + UIBuilder.escapeWideString(entry.value) + "\"" : entry.value;
                 var call = nodeSetter(entry.winrt, entry.kind, literal, literal);
                 if (call == null) continue;
 

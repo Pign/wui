@@ -1,6 +1,7 @@
 -cp src
 -cp ../../src
 -lib rui
+-lib nui
 --macro wui.macros.WinUIGenerator.register()
 -main FormDemo
 -cpp build/cpp

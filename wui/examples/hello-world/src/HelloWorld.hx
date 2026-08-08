@@ -16,21 +16,29 @@ class HelloWorld extends wui.App {
     }
 
     override function body():View {
-        return new VStack([
+        // Statement style: the macro follows what is done to a local after its
+        // declaration, and a property assignment is a statement, not a chain.
+        var title = new Text("Hello from Haxe!");
+        title.font = "TitleLarge";
+        title.foregroundColor = "accent";
+        title.padding = 12;
+
+        var subtitle = new Text("Built with wui - native WinUI 3 apps in Haxe");
+        subtitle.font = "Body";
+        subtitle.foregroundColor = "gray";
+        subtitle.padding = 12;
+
+        var root = new VStack([
             new Spacer(),
-            new Text("Hello from Haxe!")
-                .font = "TitleLarge"
-                .foregroundColor = "accent"
-                .padding = 12,
-            new Text("Built with wui - native WinUI 3 apps in Haxe")
-                .font = "Body"
-                .foregroundColor = "gray"
-                .padding = 12,
+            title,
+            subtitle,
             new HStack([
                 new Button("Learn More"),
                 new Button("Get Started")
             ], 8),
             new Spacer()
-        ]).horizontalAlignment = "Center";
+        ]);
+        root.horizontalAlignment = "Center";
+        return root;
     }
 }

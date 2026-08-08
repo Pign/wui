@@ -63,7 +63,7 @@ class NuiTree extends wui.App {
 		box.modifiers.push({type: "padding", floats: [12]});
 
 		var row = new Node("HStack")
-			.prop("spacing", PInt(8));
+			.prop("spacing", PFloat(8));
 		for (l in labels) row.child(button(l, status));
 		row.modifiers.push({type: "padding", floats: [12]});
 
@@ -80,7 +80,7 @@ class NuiTree extends wui.App {
 		// le réconciliateur est abonné exactement à ce dont la liste dépend : une
 		// écriture dans `items` la met à jour seule, sans que l'arbre au-dessus
 		// soit reparcouru.
-		var list = new Node("VStack", "liste").prop("spacing", PInt(2));
+		var list = new Node("VStack", "liste").prop("spacing", PFloat(2));
 		list.childrenThunk = function() {
 			return [for (it in items.value) new Node("Text", it).prop("text", PString("· " + it))];
 		};
@@ -107,7 +107,7 @@ class NuiTree extends wui.App {
 		shuffle.modifiers.push({type: "padding", floats: [12]});
 
 		var root = new Node("VStack")
-			.prop("spacing", PInt(4))
+			.prop("spacing", PFloat(4))
 			.child(heading)
 			.child(status)
 			.child(box)

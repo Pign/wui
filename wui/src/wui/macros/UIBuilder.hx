@@ -743,9 +743,12 @@ $refreshLists
                 kind = shared.kind;
             }
 
+            // Escaped before splicing into a C++ literal: a quote or backslash
+            // in the value is data here, not syntax there.
             var raw = node.properties.get(key);
-            var value = kind == "KString" ? "\"" + Std.string(raw) + "\"" : Std.string(raw);
-            var text = kind == "KString" ? "winrt::hstring(L\"" + Std.string(raw) + "\")" : value;
+            var escaped = escapeWideString(Std.string(raw));
+            var value = kind == "KString" ? "\"" + escaped + "\"" : Std.string(raw);
+            var text = kind == "KString" ? "winrt::hstring(L\"" + escaped + "\")" : value;
 
             // The same emitter the node runtime uses. It knows which WinRT type
             // declares a member and which ones do not take a plain value -- and

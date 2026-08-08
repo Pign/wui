@@ -173,6 +173,18 @@ class CallbackOrder {
 		HaxeBridge.applyExternalString("pasUnEtat", "x");
 		check("an external change for an unknown state is survivable", true);
 
+		// --- the node validator: property order in a chain is free ---
+		//
+		// Counter.orderedChain applies the REQUIRED property (`text`) as the
+		// outermost call. That it compiled at all under build.hxml -- where the
+		// validator runs -- is the real assertion; this only pins that the
+		// chain carries both properties.
+		var chained = Counter.orderedChain();
+		check("a chain may apply its required property last",
+			nui.PropValue.PropValueTools.asString(chained.props.get("text")) == "ordre libre"
+			&& nui.PropValue.PropValueTools.asFloat(chained.props.get("fontSize")) == 20,
+			Std.string(chained));
+
 		// --- an id nobody assigned must not run anything ---
 		Counter.last = null;
 		Callbacks.invoke(99);

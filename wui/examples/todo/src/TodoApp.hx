@@ -63,41 +63,51 @@ class TodoApp extends wui.App {
 	}
 
 	override function body():View {
-		return new VStack([
-			new Text("Todo List").font = "TitleLarge".padding = 12,
+		// Statement style: the macro follows what is done to a local after its
+		// declaration, and a property assignment is a statement, not a chain.
+		var heading = new Text("Todo List");
+		heading.font = "TitleLarge";
+		heading.padding = 12;
 
-			new HStack([
-				new TextBox("New item...", newItemText),
-				// The closure the transpiler could never carry.
-				new Button("Add").onClick = function() {
-					var title = newItemText.value;
-					if (title == "") return;
+		var field = new TextBox("New item...", newItemText);
 
-					// A new array, not a push: `rui.state.State.set` compares
-					// against the value it holds, so mutating in place would read
-					// as an unchanged write and notify nobody.
-					todos.value = todos.value.concat([new TodoItem(title, false)]);
-					newItemText.value = "";
-					trace('[todo] ajouté : $title (${todos.value.length} au total)');
-				})
-			], 8).padding = 12,
+		// The closure the transpiler could never carry.
+		var add = new Button("Add");
+		add.onClick = function() {
+			var title = newItemText.value;
+			if (title == "") return;
 
-			new ListView(todos, function(item:Dynamic) {
-				var todo:TodoItem = cast item;
-				var mark = todo.completed ? "[x] " : "[ ] ";
-				return new HStack([
-					new Text(mark + todo.title),
-					new Button(todo.completed ? "Undo" : "Done").onClick = function() {
-						todo.completed = !todo.completed;
-						// Re-assign so the write is seen: the array is the same
-						// object, and its identity is what `set` compares.
-						todos.value = todos.value.copy();
-						trace('[todo] ${todo.title} -> ${todo.completed}');
-					})
-				], 8);
-			}).padding = 12,
+			// A new array, not a push: `rui.state.State.set` compares
+			// against the value it holds, so mutating in place would read
+			// as an unchanged write and notify nobody.
+			todos.value = todos.value.concat([new TodoItem(title, false)]);
+			newItemText.value = "";
+			trace('[todo] ajouté : $title (${todos.value.length} au total)');
+		};
 
-			new Text("Astuce : tapez, Add, puis Done sur une ligne").padding = 12
-		]);
+		var entry = new HStack([field, add], 8);
+		entry.padding = 12;
+
+		var list = new ListView(todos, function(item:Dynamic) {
+			var todo:TodoItem = cast item;
+			var mark = todo.completed ? "[x] " : "[ ] ";
+			var caption = new Text(mark + todo.title);
+			var toggle = new Button(todo.completed ? "Undo" : "Done");
+			toggle.onClick = function() {
+				todo.completed = !todo.completed;
+				// Re-assign so the write is seen: the array is the same
+				// object, and its identity is what `set` compares.
+				todos.value = todos.value.copy();
+				trace('[todo] ${todo.title} -> ${todo.completed}');
+			};
+			return new HStack([caption, toggle], 8);
+		});
+		// ListView declares no padding of its own; margin is a View property.
+		list.margin = 12;
+
+		var hint = new Text("Astuce : tapez, Add, puis Done sur une ligne");
+		hint.padding = 12;
+
+		return new VStack([heading, entry, list, hint]);
 	}
 }

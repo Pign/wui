@@ -88,6 +88,21 @@ class Counter extends wui.App {
     /** Le dernier bouton actionné. Lu par le test d'ordre des identifiants. **/
     public static var last:String = null;
 
+    /**
+        Régression du validateur de noeuds : la propriété REQUISE (`text`) est
+        appliquée en dernier. L'ancien parcours jugeait aussi les chaînes
+        partielles — `new Node("Text").prop("fontSize", …)` vu de l'intérieur —
+        donc cet ordre était une fausse erreur de compilation. Que ce fichier
+        compile sous `build.hxml` (où le validateur tourne) est le test ;
+        CallbackOrder relit le contenu à l'exécution.
+    **/
+    @:keep
+    public static function orderedChain():nui.Node {
+        return new nui.Node("Text")
+            .prop("fontSize", nui.PropValue.PFloat(20))
+            .prop("text", nui.PropValue.PString("ordre libre"));
+    }
+
     static function report(which:String):Void {
         clicks++;
         last = which;

@@ -361,9 +361,7 @@ class WinUIGenerator {
                 case TBinop(OpAssign, {expr: TField(_, fa)}, value):
                     var key = fieldNameOf(fa);
                     if (key == null) continue;
-                    var v:Dynamic = extractFloatValue(value);
-                    if (v == null) v = extractStringOrExpr(value);
-                    if (v != null) node.properties.set(key, v);
+                    node.properties.set(key, mutationValue(key, value));
 
                 // `a.onClick(...)`, and property assignments.
                 //
@@ -385,9 +383,7 @@ class WinUIGenerator {
                             continue;
                         }
 
-                        var v:Dynamic = extractFloatValue(args[0]);
-                        if (v == null) v = extractStringOrExpr(args[0]);
-                        if (v != null) node.properties.set(key, v);
+                        node.properties.set(key, mutationValue(key, args[0]));
                     } else if (called == "onClick" && args.length > 0) {
                         node.properties.set("hasHaxeCallback", true);
                     }
@@ -522,13 +518,13 @@ class WinUIGenerator {
                     props.set("boundState", bound.boundState);
                     props.set("boundFormat", bound.format);
                 } else {
-                    var text = args.length > 0 ? extractStringOrExpr(args[0]) : "Text";
+                    var text = textArg != null ? requireStringConst("text", "Text", textArg) : "Text";
                     props.set("text", text);
                 }
                 { viewType: "TextBlock", children: [], properties: props };
 
             case "wui.ui.Button":
-                var label = args.length > 0 ? extractStringOrExpr(args[0]) : "Button";
+                var label = args.length > 0 ? requireStringConst("text", "Button", args[0]) : "Button";
                 var props:Map<String, Dynamic> = new Map();
                 props.set("label", label);
                 // args[1] = icon (optional), args[2] = action (StateAction)
@@ -564,9 +560,8 @@ class WinUIGenerator {
 
             case "wui.ui.TextBox":
                 var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) {
-                    var placeholder = extractStringOrExpr(args[0]);
-                    if (placeholder != null) props.set("placeholder", placeholder);
+                if (args.length > 0 && !isNullLiteral(args[0])) {
+                    props.set("placeholder", requireStringConst("placeholder", "TextBox", args[0]));
                 }
                 if (args.length > 1) {
                     var stateRef = deepExtractStateRef(args[1]);
@@ -576,9 +571,8 @@ class WinUIGenerator {
 
             case "wui.ui.ToggleSwitch":
                 var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) {
-                    var label = extractStringOrExpr(args[0]);
-                    if (label != null) props.set("label", label);
+                if (args.length > 0 && !isNullLiteral(args[0])) {
+                    props.set("label", requireStringConst("label", "ToggleSwitch", args[0]));
                 }
                 if (args.length > 1) {
                     var stateRef = deepExtractStateRef(args[1]);
@@ -588,9 +582,8 @@ class WinUIGenerator {
 
             case "wui.ui.CheckBox":
                 var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) {
-                    var label = extractStringOrExpr(args[0]);
-                    if (label != null) props.set("label", label);
+                if (args.length > 0 && !isNullLiteral(args[0])) {
+                    props.set("label", requireStringConst("label", "CheckBox", args[0]));
                 }
                 if (args.length > 1) {
                     var stateRef = deepExtractStateRef(args[1]);
@@ -612,7 +605,9 @@ class WinUIGenerator {
 
             case "wui.ui.Image":
                 var props:Map<String, Dynamic> = new Map();
-                if (args.length > 0) props.set("source", extractStringOrExpr(args[0]));
+                if (args.length > 0 && !isNullLiteral(args[0])) {
+                    props.set("source", requireStringConst("source", "Image", args[0]));
+                }
                 { viewType: "Image", children: [], properties: props };
 
             case "wui.ui.ScrollViewer":
@@ -683,6 +678,13 @@ class WinUIGenerator {
         }
     }
 
+    /**
+     * The constant a string-typed expression holds, or `null` when it is not
+     * one. It used to answer the placeholder "..." for anything non-constant,
+     * which then shipped: a label built from an expression rendered a literal
+     * `...` on screen. Callers that need a value now refuse to compile instead
+     * -- see `requireStringConst`.
+     */
     static function extractStringOrExpr(expr:TypedExpr):String {
         if (expr == null) return null;
         switch (expr.expr) {
@@ -692,9 +694,55 @@ class WinUIGenerator {
                 return Std.string(i);
             case TConst(TFloat(s)):
                 return s;
+            case TParenthesis(e) | TCast(e, _) | TMeta(_, e):
+                return extractStringOrExpr(e);
             default:
-                return "...";
+                return null;
         }
+    }
+
+    /** A string property the generator must emit: a constant, or a refusal. **/
+    static function requireStringConst(prop:String, viewType:String, expr:TypedExpr):String {
+        var s = extractStringOrExpr(expr);
+        if (s == null) {
+            Context.error('wui : la propriete "$prop" de $viewType doit etre une constante '
+                + 'ici -- le transpileur ne peut pas traduire une expression. '
+                + 'Pour une valeur dynamique, passez par un @:state.', expr.pos);
+        }
+        return s;
+    }
+
+    /** A literal `true`/`false`, or `null` when the expression is anything else. **/
+    static function extractBoolLiteral(expr:TypedExpr):Null<Bool> {
+        if (expr == null) return null;
+        return switch (expr.expr) {
+            case TConst(TBool(b)): b;
+            case TParenthesis(e) | TCast(e, _) | TMeta(_, e): extractBoolLiteral(e);
+            default: null;
+        };
+    }
+
+    /**
+     * The constant a local mutation assigns, stored with its own type.
+     *
+     * `a.visible = false` used to fall through to the string path, whose
+     * answer for anything non-constant was the placeholder "..." -- which the
+     * emitter then spliced into a `Visibility(... ? ...)` call, an MSVC error
+     * pointing at generated code. A boolean is a real case now, and a value
+     * that is not a constant is refused here, naming the property, instead of
+     * surfacing in a file nobody wrote.
+     */
+    static function mutationValue(key:String, expr:TypedExpr):Dynamic {
+        var f = extractFloatValue(expr);
+        if (f != null) return f;
+        var b = extractBoolLiteral(expr);
+        if (b != null) return b;
+        var s = extractStringOrExpr(expr);
+        if (s != null) return s;
+        Context.error('wui : la valeur assignee a "$key" doit etre une constante -- '
+            + 'le transpileur ne peut pas traduire une expression. '
+            + 'Pour une valeur dynamique, passez par un @:state.', expr.pos);
+        return null;
     }
 
     static function extractStringReturn(texpr:TypedExpr):String {
@@ -877,7 +925,7 @@ class WinUIGenerator {
                     var prefix = extractStringOrExpr(e1);
                     // Deep search for state ref in e2 (may be wrapped in toString/Std.string)
                     var stateRef = deepExtractStateRef(e2);
-                    if (prefix != null && prefix != "..." && stateRef != null) {
+                    if (prefix != null && stateRef != null) {
                         var escaped = UIBuilder.escapeWideString(prefix);
                         var valueExpr = stateToWstring(stateRef);
                         return {
@@ -889,7 +937,7 @@ class WinUIGenerator {
                     // count + "suffix"
                     var stateRef1 = deepExtractStateRef(e1);
                     var suffix = extractStringOrExpr(e2);
-                    if (stateRef1 != null && suffix != null && suffix != "...") {
+                    if (stateRef1 != null && suffix != null) {
                         var escaped = UIBuilder.escapeWideString(suffix);
                         var valueExpr = stateToWstring(stateRef1);
                         return {

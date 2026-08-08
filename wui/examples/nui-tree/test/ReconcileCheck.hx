@@ -143,7 +143,7 @@ class ReconcileCheck {
 		// `clearProp`: absence is not an operation, it is an application of the
 		// value the schema declares for it.
 		sink.ops = [];
-		var withSpacing = new Node("VStack").prop("spacing", PInt(8));
+		var withSpacing = new Node("VStack").prop("spacing", PFloat(8));
 		var m2 = r.reconcile(null, withSpacing, 0);
 
         sink.ops = [];
