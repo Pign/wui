@@ -456,12 +456,31 @@ class HaxeBridge {
 
 		nuiSink = new wui.nui.WinUISink();
 		nuiReconciler = new wui.nui.Reconciler(nuiSink);
-		nuiTree = nuiReconciler.reconcile(null, node, 0);
+
+		// Render inside an effect, so the app never asks for a re-render.
+		//
+		// Anything reactive the view reads subscribes it, and a write to that
+		// state reconciles on its own. Without this an app had to call
+		// `rerenderNui()` by hand -- framework plumbing in application code, and
+		// on a backend it is not supposed to name.
+		nuiEffect = new rui.Signal.Effect(function() {
+			var tree = appInstance.nuiBody();
+			if (tree == null) {
+				trace("[wui] nuiBody() returned null");
+				return;
+			}
+			nuiTree = nuiReconciler.reconcile(nuiTree, tree, 0);
+		});
+
 		trace('[wui] nui: arbre monté, ${Callbacks.nodeCount()} gestionnaire(s)');
 	}
 
 	/**
-		Re-render the node tree, applying only what changed.
+		Force a re-render.
+
+		Rarely needed: `renderNui` runs the view inside an effect, so reactive
+		state re-renders on its own. This stays for a view that depends on
+		something outside the reactive system.
 
 		This is the whole point of the push contract: the app asks for a fresh
 		tree, and the controls that did not change are never touched — so a text
@@ -486,6 +505,7 @@ class HaxeBridge {
 	static var nuiSink:wui.nui.WinUISink = null;
 	static var nuiReconciler:wui.nui.Reconciler<Int> = null;
 	static var nuiTree:wui.nui.Mounted<Int> = null;
+	static var nuiEffect:rui.Signal.Effect = null;
 
 	/** Hand one integer to the generated C++, which owns `s_<name>`. **/
 	static function pushInt(name:String, value:Int):Void {
