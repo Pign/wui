@@ -228,12 +228,23 @@ class BridgeGenerator {
             + " " + valueExpr + " == std::string(\"Caption\") ? 12 : 14)";
     }
 
-    /** A name to its alignment enum, on the type that declares it. **/
+    /**
+        A name to its alignment enum.
+
+        The two enums do not share their values: horizontal is Left/Center/Right,
+        vertical is Top/Center/Bottom. One conversion for both compiled here and
+        was rejected by MSVC, which is the sort of thing only the real compiler
+        knows.
+    **/
     static function alignmentExpr(member:String, valueExpr:String):String {
         var e = "winrt_xaml::" + member;
+        var near = member == "VerticalAlignment" ? "Top" : "Left";
+        var far = member == "VerticalAlignment" ? "Bottom" : "Right";
+
         return "(" + valueExpr + " == std::string(\"Center\") ? " + e + "::Center :"
-            + " " + valueExpr + " == std::string(\"Right\") ? " + e + "::Right :"
-            + " " + valueExpr + " == std::string(\"Left\") ? " + e + "::Left : " + e + "::Stretch)";
+            + " " + valueExpr + " == std::string(\"" + far + "\") ? " + e + "::" + far + " :"
+            + " " + valueExpr + " == std::string(\"" + near + "\") ? " + e + "::" + near
+            + " : " + e + "::Stretch)";
     }
 
     /**
@@ -261,7 +272,9 @@ class BridgeGenerator {
             case "FontScale":
                 "FontSize(" + fontScale(valueExpr) + ")";
             case "FontWeight":
-                member + "(" + valueExpr + " ? winrt::Windows::UI::Text::FontWeights::SemiBold() : winrt::Windows::UI::Text::FontWeights::Normal())";
+                // A struct literal, not FontWeights::SemiBold(): that is a
+                // function returning auto and MSVC refuses it here.
+                member + "(" + valueExpr + " ? winrt::Windows::UI::Text::FontWeight{ 600 } : winrt::Windows::UI::Text::FontWeight{ 400 })";
             case "HorizontalAlignment" | "VerticalAlignment":
                 member + "(" + alignmentExpr(member, valueExpr) + ")";
             case _:
