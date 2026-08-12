@@ -1,22 +1,21 @@
 package wui.ui;
 
-import wui.View;
+/** A progress indicator, determinate when given a value. **/
+@:winuiType("ProgressRing")
+@:build(wui.macros.ControlBuilder.build())
+class ProgressRing extends Control {
+	@:winrt("Value") public var value:Null<Float>;
+	@:winrt("IsIndeterminate") public var isIndeterminate:Null<Bool>;
+	@:winrt("IsActive") public var isActive:Null<Bool>;
 
-/**
- * A circular progress indicator. Maps to WinUI ProgressRing.
- *
- * Usage:
- *   new ProgressRing()           // indeterminate
- *   new ProgressRing(0.5)        // 50% progress
- */
-class ProgressRing extends View {
-    public function new(?value:Float) {
-        super("ProgressRing");
-        if (value != null) {
-            properties.set("value", value);
-            properties.set("isIndeterminate", false);
-        } else {
-            properties.set("isIndeterminate", true);
-        }
-    }
+	public function new(?value:Float) {
+		super("ProgressRing");
+		this.isActive = true;
+		if (value != null) {
+			this.value = value;
+			this.isIndeterminate = false;
+		} else {
+			this.isIndeterminate = true;
+		}
+	}
 }

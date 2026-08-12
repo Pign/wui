@@ -37,6 +37,11 @@ class WinUIGenerator {
         if (registered) return;
         registered = true;
 
+        // Refuse a view the push sink cannot build, rather than letting it
+        // reach the screen as `?TabView`. Scoped to push-mode apps, since the
+        // transpiled path handles types the sink does not.
+        wui.macros.PushCoverage.register();
+
         // Force the Haxe/WinUI bridge into the build.
         //
         // Nothing in an app references wui.bridge.HaxeBridge, so without this the

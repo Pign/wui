@@ -1,19 +1,19 @@
 package wui.ui;
 
-import wui.View;
+/** A value picked along a track. **/
+@:winuiType("Slider")
+@:build(wui.macros.ControlBuilder.build())
+class Slider extends Control {
+	@:winrt("Minimum") public var min:Null<Float>;
+	@:winrt("Maximum") public var max:Null<Float>;
+	@:winrt("Value") public var value:Null<Float>;
+	@:winrt("StepFrequency") public var step:Null<Float>;
 
-/**
- * A slider control for numeric ranges. Maps to WinUI Slider.
- *
- * Usage:
- *   new Slider(0, 100, volumeState)
- */
-class Slider extends View {
-    public function new(min:Float, max:Float, ?binding:Dynamic, ?step:Float) {
-        super("Slider");
-        properties.set("min", min);
-        properties.set("max", max);
-        if (binding != null) properties.set("binding", binding);
-        if (step != null) properties.set("step", step);
-    }
+	public function new(min:Float, max:Float, ?binding:Dynamic, ?step:Float) {
+		super("Slider");
+		this.min = min;
+		this.max = max;
+		if (binding != null) properties.set("binding", binding);
+		if (step != null) this.step = step;
+	}
 }

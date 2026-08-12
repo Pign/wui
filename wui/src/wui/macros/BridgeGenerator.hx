@@ -260,7 +260,11 @@ class BridgeGenerator {
                 member + "(wui::runtime::brushFromName(" + valueExpr + "))";
             case "Orientation":
                 member + "(std::string(" + valueExpr + ") == \"Horizontal\" ? winrt_controls::Orientation::Horizontal : winrt_controls::Orientation::Vertical)";
-            case "Content":
+            // Both take an IInspectable, not a string: WinUI lets a header or a
+            // content be any element, and a string has to be boxed to become
+            // one. Passing the hstring compiled to "no overloaded function
+            // could convert all the argument types", which names the symptom.
+            case "Content" | "Header":
                 member + "(winrt::box_value(" + textExpr + "))";
             case "Visibility":
                 member + "(" + valueExpr + " ? winrt_xaml::Visibility::Visible : winrt_xaml::Visibility::Collapsed)";
