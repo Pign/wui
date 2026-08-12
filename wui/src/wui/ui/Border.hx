@@ -24,6 +24,11 @@ class Border extends View {
 	@:winrt("CornerRadius") public var cornerRadius:Null<Float>;
 	@:winrt("Padding") public var padding:Null<Float>;
 
+	// A label the sink can read back off the control. `Spacer` uses it to stay
+	// recognisable inside an `HStack`, which builds columns and has to know
+	// which of them takes the leftover room.
+	@:winrt("Tag") public var tag:Null<String>;
+
 	public function new(?viewType:String, ?children:Array<View>) {
 		super(viewType == null ? "Border" : viewType, children);
 	}

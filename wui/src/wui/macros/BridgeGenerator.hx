@@ -104,6 +104,22 @@ class BridgeGenerator {
         src.add("    // cannot one day have both, and sharing the slot would silently revoke\n");
         src.add("    // one by subscribing the other.\n");
         src.add("    std::vector<winrt::event_token> g_valueTokens;\n\n");
+        // The Tag a control was given, as text, or empty.
+        //
+        // Read through IPropertyValue rather than `unbox_value_or<hstring>`:
+        // that one instantiates IReference<hstring>, which this header set
+        // rejects outright ("T must be WinRT type"). The boxing interface
+        // underneath asks nothing of the type system and answers the same
+        // question.
+        src.add("    std::wstring tagText(winrt_xaml::UIElement const& e) {\n");
+        src.add("        auto fe = e.try_as<winrt_xaml::FrameworkElement>();\n");
+        src.add("        if (fe == nullptr) return L\"\";\n");
+        src.add("        auto boxed = fe.Tag();\n");
+        src.add("        if (boxed == nullptr) return L\"\";\n");
+        src.add("        auto pv = boxed.try_as<winrt::Windows::Foundation::IPropertyValue>();\n");
+        src.add("        if (pv == nullptr || pv.Type() != winrt::Windows::Foundation::PropertyType::String) return L\"\";\n");
+        src.add("        return std::wstring(pv.GetString().c_str());\n    }\n\n");
+
         src.add("    winrt_xaml::UIElement at(int h) {\n");
         src.add("        if (h < 0 || h >= (int)g_nodes.size()) return nullptr;\n");
         src.add("        return g_nodes[h];\n    }\n\n");
@@ -134,10 +150,21 @@ class BridgeGenerator {
             src.add("        winrt_controls::" + winui + " c;\n");
             for (entry in wui.nui.Vocabulary.defaultsFor(type)) {
                 // Escaped like every other splice: a declared default is still
-                // a string landing inside a C++ literal.
-                var literal = entry.kind == "KString"
+                // a string landing inside a C++ literal -- and converted to an
+                // hstring here rather than left as a narrow one. A member that
+                // boxes its value (`Tag`, `Content`, `Header`) would otherwise
+                // be handed a `char[4]`, and box_value on an array asks WinRT
+                // for `IReference<char[4]>`: "T must be WinRT type", from inside
+                // a generated header that names none of our files.
+                //
+                // Two forms, exactly as the runtime path passes two: the wide
+                // one for members that take text, the narrow one for the enum
+                // conversions, which compare against `std::string`.
+                var narrow = entry.kind == "KString"
                     ? "\"" + UIBuilder.escapeWideString(entry.value) + "\"" : entry.value;
-                var call = nodeSetter(entry.winrt, entry.kind, literal, literal);
+                var wide = entry.kind == "KString"
+                    ? "winrt::hstring(wui::runtime::fromUtf8(" + narrow + "))" : entry.value;
+                var call = nodeSetter(entry.winrt, entry.kind, wide, narrow);
                 if (call == null) continue;
 
                 src.add("        c." + call + ";\n");
@@ -279,6 +306,25 @@ class BridgeGenerator {
         src.add("extern \"C\" void wui_node_insert(int parent, int child, int index) {\n");
         src.add("    auto p = at(parent);\n    auto c = at(child);\n");
         src.add("    if (p == nullptr || c == nullptr) return;\n\n");
+        // A row is a Grid, and its children go into columns rather than into a
+        // queue. That is the whole of what makes a spacer work: a StackPanel
+        // hands every child the size it asks for and has no leftover room to
+        // give away, so an empty Border between two labels came out zero wide.
+        // Sized `Auto` for real content and `*` for a spacer, the spacers share
+        // whatever the row does not use.
+        src.add("    if (auto grid = p.try_as<winrt_controls::Grid>()) {\n");
+        src.add("        if (tagText(p) == L\"row\") {\n");
+        src.add("            auto fe = c.try_as<winrt_xaml::FrameworkElement>();\n");
+        src.add("            winrt_controls::ColumnDefinition column;\n");
+        src.add("            column.Width(tagText(c) == L\"spacer\"\n");
+        src.add("                ? winrt_xaml::GridLength{ 1.0, winrt_xaml::GridUnitType::Star }\n");
+        src.add("                : winrt_xaml::GridLength{ 0.0, winrt_xaml::GridUnitType::Auto });\n\n");
+        src.add("            uint32_t column_index = grid.ColumnDefinitions().Size();\n");
+        src.add("            grid.ColumnDefinitions().Append(column);\n");
+        src.add("            grid.Children().Append(c);\n");
+        src.add("            if (fe != nullptr) winrt_controls::Grid::SetColumn(fe, (int)column_index);\n");
+        src.add("            return;\n        }\n    }\n\n");
+
         src.add("    // A panel is the only shape with an ordered list, so it is the only\n");
         src.add("    // one that can honour `index`. WinUI can place a child at a chosen\n");
         src.add("    // position; Silica cannot -- its positioners append -- which is why\n");
@@ -323,6 +369,20 @@ class BridgeGenerator {
         src.add("extern \"C\" void wui_node_remove(int parent, int child) {\n");
         src.add("    auto p = at(parent);\n    auto c = at(child);\n");
         src.add("    if (p == nullptr || c == nullptr) return;\n\n");
+        // A row loses a column with the child that occupied it, and the ones
+        // after it move up. Leaving the column behind would keep its share of
+        // the width reserved for a control that is gone.
+        src.add("    if (auto grid = p.try_as<winrt_controls::Grid>()) {\n");
+        src.add("        if (tagText(p) == L\"row\") {\n");
+        src.add("            uint32_t index = 0;\n");
+        src.add("            if (grid.Children().IndexOf(c, index)) {\n");
+        src.add("                grid.Children().RemoveAt(index);\n");
+        src.add("                if (index < grid.ColumnDefinitions().Size()) grid.ColumnDefinitions().RemoveAt(index);\n");
+        src.add("                for (uint32_t i = index; i < grid.Children().Size(); ++i) {\n");
+        src.add("                    if (auto moved = grid.Children().GetAt(i).try_as<winrt_xaml::FrameworkElement>())\n");
+        src.add("                        winrt_controls::Grid::SetColumn(moved, (int)i);\n                }\n            }\n");
+        src.add("            return;\n        }\n    }\n\n");
+
         src.add("    if (auto panel = p.try_as<winrt_controls::Panel>()) {\n");
         src.add("        uint32_t index = 0;\n");
         src.add("        if (panel.Children().IndexOf(c, index)) panel.Children().RemoveAt(index);\n");
@@ -496,7 +556,7 @@ class BridgeGenerator {
             // content be any element, and a string has to be boxed to become
             // one. Passing the hstring compiled to "no overloaded function
             // could convert all the argument types", which names the symptom.
-            case "Content" | "Header":
+            case "Content" | "Header" | "Tag":
                 member + "(winrt::box_value(" + textExpr + "))";
             case "Visibility":
                 member + "(" + valueExpr + " ? winrt_xaml::Visibility::Visible : winrt_xaml::Visibility::Collapsed)";
@@ -631,6 +691,7 @@ int __stdcall wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 
     static function generateRuntime(outputDir:String):Void {
         var content = '#pragma once
+#include <cctype>
 #include <functional>
 #include <string>
 #include <vector>
@@ -720,6 +781,16 @@ namespace wui { namespace runtime {
     // when it chose to skip a hex colour rather than approximate it.
     inline winrt::Microsoft::UI::Xaml::Media::SolidColorBrush brushFromName(const char* name) {
         std::string n(name == nullptr ? "" : name);
+        // Folded, because a colour is not a different colour for being
+        // capitalised. The divider in mui asked for "Gray", this table held
+        // "gray", and the mismatch cost it its whole background -- a grey line
+        // one pixel tall that drew nothing at all, on every screen it was on.
+        for (auto& ch : n) ch = (char)std::tolower((unsigned char)ch);
+        if (!n.empty() && n != "black" && n != "white" && n != "red" && n != "green"
+            && n != "blue" && n != "yellow" && n != "orange" && n != "purple"
+            && n != "gray" && n != "accent") {
+            OutputDebugStringA(("[wui] no colour named " + n + "\\n").c_str());
+        }
         if (n == "black")   return blackBrush();
         if (n == "white")   return whiteBrush();
         if (n == "red")     return redBrush();
