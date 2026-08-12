@@ -179,6 +179,34 @@ extern "C" void wui_bridge_invoke_node(int id) {
     ::wui::bridge::Callbacks_obj::invokeNode(id);
 }
 
+// The same range, for a control that reports a value along with the event.
+//
+// This is the half of the push contract that makes a control two-way. Without
+// it the sink could put a value on screen but never hear one back: a switch the
+// user flipped changed nothing in Haxe, and the line reading the cell it was
+// bound to never moved. The control is the authority on its own value at the
+// moment it fires, so that value crosses with the event rather than being
+// assumed from whatever Haxe last wrote.
+extern "C" void wui_bridge_invoke_node_string(int id, const char* value) {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::Callbacks_obj::invokeNodeString(id, ::String(value));
+}
+
+extern "C" void wui_bridge_invoke_node_float(int id, double value) {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::Callbacks_obj::invokeNodeFloat(id, value);
+}
+
+extern "C" void wui_bridge_invoke_node_int(int id, int value) {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::Callbacks_obj::invokeNodeInt(id, value);
+}
+
+extern "C" void wui_bridge_invoke_node_bool(int id, bool value) {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::Callbacks_obj::invokeNodeBool(id, value);
+}
+
 // A row button. Separate from wui_bridge_invoke because row ids are rebuilt on
 // every list change while the other table is fixed at compile time -- one entry
 // point for each keeps a stale row click from running an unrelated closure.

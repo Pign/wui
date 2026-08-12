@@ -80,7 +80,14 @@ class BridgeGenerator {
         src.add("namespace winrt_xaml = winrt::Microsoft::UI::Xaml;\n\n");
         src.add("// Implemented in the hxcpp library: a node property that is a handler crosses\n");
         src.add("// as an id, never as a pointer -- the same rule as every other callback here.\n");
-        src.add("extern \"C\" void wui_bridge_invoke_node(int id);\n\n");
+        src.add("extern \"C\" void wui_bridge_invoke_node(int id);\n");
+        src.add("// A control that carries a value hands it back with the event. What Haxe last\n");
+        src.add("// wrote is not the answer: the user may have typed since, and the field is the\n");
+        src.add("// authority on its own contents.\n");
+        src.add("extern \"C\" void wui_bridge_invoke_node_string(int id, const char* value);\n");
+        src.add("extern \"C\" void wui_bridge_invoke_node_float(int id, double value);\n");
+        src.add("extern \"C\" void wui_bridge_invoke_node_int(int id, int value);\n");
+        src.add("extern \"C\" void wui_bridge_invoke_node_bool(int id, bool value);\n\n");
 
         src.add("namespace {\n");
         src.add("    // Index -> control. Handles are never reused: a stale one then names a hole\n");
@@ -91,17 +98,25 @@ class BridgeGenerator {
         src.add("    // WinUI events accumulate, and a re-render hands fresh closures that can\n");
         src.add("    // never compare equal, so without revoking first one click fires n+1 times.\n");
         src.add("    std::vector<winrt::event_token> g_clickTokens;\n\n");
+        src.add("    // The same, for the one event a control uses to report its own value.\n");
+        src.add("    // A separate vector rather than a second use of the one above: a Button\n");
+        src.add("    // has a click and a Slider has a value change, but nothing says a control\n");
+        src.add("    // cannot one day have both, and sharing the slot would silently revoke\n");
+        src.add("    // one by subscribing the other.\n");
+        src.add("    std::vector<winrt::event_token> g_valueTokens;\n\n");
         src.add("    winrt_xaml::UIElement at(int h) {\n");
         src.add("        if (h < 0 || h >= (int)g_nodes.size()) return nullptr;\n");
         src.add("        return g_nodes[h];\n    }\n\n");
         src.add("    int put(winrt_xaml::UIElement const& e) {\n");
         src.add("        g_nodes.push_back(e);\n        g_clickTokens.push_back(winrt::event_token{});\n");
+        src.add("        g_valueTokens.push_back(winrt::event_token{});\n");
         src.add("        return (int)g_nodes.size() - 1;\n    }\n}\n\n");
 
         src.add("namespace wui { namespace nodes {\n");
         src.add("    void reset(winrt_xaml::UIElement const& root) {\n");
-        src.add("        g_nodes.clear();\n        g_clickTokens.clear();\n");
-        src.add("        g_nodes.push_back(root);\n        g_clickTokens.push_back(winrt::event_token{});\n    }\n\n");
+        src.add("        g_nodes.clear();\n        g_clickTokens.clear();\n        g_valueTokens.clear();\n");
+        src.add("        g_nodes.push_back(root);\n        g_clickTokens.push_back(winrt::event_token{});\n");
+        src.add("        g_valueTokens.push_back(winrt::event_token{});\n    }\n\n");
         src.add("    winrt_xaml::UIElement rootElement() {\n");
         src.add("        return g_nodes.empty() ? nullptr : g_nodes[0];\n    }\n}}\n\n");
 
@@ -164,8 +179,9 @@ class BridgeGenerator {
                     // the member. That is what replaced the owner table: a
                     // hand-kept list of which WinRT type declares what, already
                     // wrong about Panel, and failing in silence when it was.
+                    var statement = reassertGuard(entry.winrt, kind == "KString" ? "text" : "value", call);
                     src.add("    if (t == \"" + type + "\" && k == \"" + entry.name + "\") {\n");
-                    src.add("        if (auto c = e.try_as<winrt_controls::" + winui + ">()) { c." + call + "; }\n");
+                    src.add("        if (auto c = e.try_as<winrt_controls::" + winui + ">()) { " + statement + " }\n");
                     src.add("        return;\n    }\n");
                 }
             }
@@ -175,12 +191,48 @@ class BridgeGenerator {
         // ---- the rest: unchanged, and not derivable ----
         src.add("extern \"C\" void wui_node_prop_callback(int h, const char* type, const char* key, int callbackId) {\n");
         src.add("    auto e = at(h);\n    if (e == nullptr) return;\n");
-        src.add("    if (std::string(key) != \"onClick\") return;\n");
-        src.add("    if (auto b = e.try_as<winrt_controls::Button>()) {\n");
-        src.add("        if (g_clickTokens[h].value != 0) { b.Click(g_clickTokens[h]); }\n");
-        src.add("        g_clickTokens[h] = b.Click([callbackId](winrt::Windows::Foundation::IInspectable const&,\n");
-        src.add("                                               winrt_xaml::RoutedEventArgs const&) {\n");
-        src.add("            wui_bridge_invoke_node(callbackId);\n        });\n    }\n}\n\n");
+        src.add("    std::string k(key);\n\n");
+        src.add("    if (k == \"onClick\") {\n");
+        src.add("        if (auto b = e.try_as<winrt_controls::Button>()) {\n");
+        src.add("            if (g_clickTokens[h].value != 0) { b.Click(g_clickTokens[h]); }\n");
+        src.add("            g_clickTokens[h] = b.Click([callbackId](winrt::Windows::Foundation::IInspectable const&,\n");
+        src.add("                                                   winrt_xaml::RoutedEventArgs const&) {\n");
+        src.add("                wui_bridge_invoke_node(callbackId);\n            });\n        }\n        return;\n    }\n\n");
+
+        // The value the handler reports is read off the **sender**, never off a
+        // captured control. Capturing would make the control own a handler that
+        // owns the control, which is a reference cycle WinRT has no collector to
+        // break; the sender is the same object, handed over for free.
+        //
+        // The lambdas take `auto const&` so the delegate types stay out of this
+        // file. Naming them would drag in headers per control and buy nothing:
+        // the compiler still checks the call.
+        src.add("    // Each control reports through the one event that carries its value.\n");
+        src.add("    if (k == \"onToggle\") {\n");
+        src.add("        if (auto c = e.try_as<winrt_controls::ToggleSwitch>()) {\n");
+        src.add("            if (g_valueTokens[h].value != 0) { c.Toggled(g_valueTokens[h]); }\n");
+        src.add("            g_valueTokens[h] = c.Toggled([callbackId](auto const& sender, auto const&) {\n");
+        src.add("                if (auto s = sender.template try_as<winrt_controls::ToggleSwitch>()) {\n");
+        src.add("                    wui_bridge_invoke_node_bool(callbackId, s.IsOn());\n                }\n");
+        src.add("            });\n        }\n        return;\n    }\n\n");
+
+        src.add("    if (k == \"onText\") {\n");
+        src.add("        if (auto c = e.try_as<winrt_controls::TextBox>()) {\n");
+        src.add("            if (g_valueTokens[h].value != 0) { c.TextChanged(g_valueTokens[h]); }\n");
+        src.add("            g_valueTokens[h] = c.TextChanged([callbackId](auto const& sender, auto const&) {\n");
+        src.add("                if (auto s = sender.template try_as<winrt_controls::TextBox>()) {\n");
+        src.add("                    wui_bridge_invoke_node_string(callbackId, winrt::to_string(s.Text()).c_str());\n                }\n");
+        src.add("            });\n        }\n        return;\n    }\n\n");
+
+        src.add("    if (k == \"onValue\") {\n");
+        src.add("        if (auto c = e.try_as<winrt_controls::Slider>()) {\n");
+        src.add("            if (g_valueTokens[h].value != 0) { c.ValueChanged(g_valueTokens[h]); }\n");
+        src.add("            g_valueTokens[h] = c.ValueChanged([callbackId](auto const& sender, auto const&) {\n");
+        src.add("                if (auto s = sender.template try_as<winrt_controls::Slider>()) {\n");
+        src.add("                    wui_bridge_invoke_node_float(callbackId, s.Value());\n                }\n");
+        src.add("            });\n        }\n        return;\n    }\n\n");
+
+        src.add("    OutputDebugStringA(\"[wui] callback ignored: no event on this control reports it\\n\");\n}\n\n");
 
         src.add("extern \"C\" void wui_node_modifier(int h, const char* type, const char* modType, double f0, const char* s0) {\n");
         src.add("    // nui keeps an ordered modifier chain; wui has no such concept any more --\n");
@@ -284,6 +336,30 @@ class BridgeGenerator {
         The WinRT call for one property, or `null` when the node path cannot make
         it yet -- reported by its absence rather than emitted wrong.
     **/
+    /**
+        Never re-assert a value a control already has.
+
+        A two-way control is written by the user and then written again by the
+        render that the user's own edit provoked -- the same value, arriving a
+        moment later. WinRT does not treat that as a no-op: assigning `Text`
+        moves the caret, and assigning `IsOn` cuts the switch animation off
+        mid-slide and replaces it with a jump. Both read as the control being
+        rebuilt under the user's hands, which is exactly what push mode exists
+        to avoid.
+
+        Only the properties a control writes back are guarded. Reading a brush
+        or an alignment to compare it would cost more than setting it, and none
+        of them can be changed from under us.
+    **/
+    static function reassertGuard(member:String, valueExpr:String, call:String):String {
+        return switch (member) {
+            case "Text" | "IsOn" | "Value":
+                "if (c." + member + "() != " + valueExpr + ") { c." + call + "; }";
+            case _:
+                "c." + call + ";";
+        };
+    }
+
     public static function nodeSetter(member:String, kind:String, textExpr:String, valueExpr:String):Null<String> {
         return switch (member) {
             case "Foreground" | "Background" | "BorderBrush":

@@ -140,25 +140,20 @@ class WinUISink implements NodeSink<Int> {
 				case PBool(v):
 					nativePropBool(target, type, key, v);
 
-				case PCallback(fn):
-					// An id crosses, never the closure: a closure held only by
-					// native code is invisible to the hxcpp GC, which is the wall
-					// both sibling backends hit before this one.
-					var slot = target + ":" + key;
-					if (callbackIds.exists(slot)) {
-						// Same id, new meaning. The control does not need telling.
-						Callbacks.setNode(callbackIds.get(slot), fn);
-					} else {
-						var id = Callbacks.registerNode(fn);
-						callbackIds.set(slot, id);
-						nativePropCallback(target, type, key, id);
-					}
-
-				case PCallbackString(_) | PCallbackFloat(_) | PCallbackInt(_):
-					// These need the control to hand its live value back. The
-					// plumbing for that is not written yet, and reporting beats a
-					// handler that silently never fires.
-					trace('[wui] $type.$key: value-carrying handlers are not wired yet');
+				// An id crosses, never the closure: a closure held only by native
+				// code is invisible to the hxcpp GC, which is the wall both
+				// sibling backends hit before this one.
+				//
+				// The four value-carrying forms register exactly like the plain
+				// one. Nothing here has to know which of them it is holding: the
+				// id names a slot, and it is the generated C++ -- which knows
+				// what event the control has -- that decides whether to call
+				// back with a string, a number or a switch position.
+				case PCallback(fn): registerHandler(target, type, key, fn);
+				case PCallbackString(fn): registerHandler(target, type, key, fn);
+				case PCallbackFloat(fn): registerHandler(target, type, key, fn);
+				case PCallbackInt(fn): registerHandler(target, type, key, fn);
+				case PCallbackBool(fn): registerHandler(target, type, key, fn);
 
 				case PReactive(_):
 					// resolve() is a fixed point, so this cannot happen. Saying so
@@ -166,6 +161,27 @@ class WinUISink implements NodeSink<Int> {
 					trace('[wui] $type.$key: PReactive survived resolution');
 			}
 		});
+	}
+
+	/**
+		Give a (node, property) slot an id, or point its existing id at a new
+		closure.
+
+		Ids are allocated once per slot and reused. A re-render hands fresh
+		closures -- each one closing over what the app just read -- and allocating
+		a new id for every one of them would grow the table for as long as the app
+		runs. The control keeps pointing at the same id; only what the id means
+		changes, so it is never told again.
+	**/
+	function registerHandler(target:Int, type:String, key:String, fn:Dynamic):Void {
+		var slot = target + ":" + key;
+		if (callbackIds.exists(slot)) {
+			Callbacks.setNode(callbackIds.get(slot), fn);
+			return;
+		}
+		var id = Callbacks.registerNode(fn);
+		callbackIds.set(slot, id);
+		nativePropCallback(target, type, key, id);
 	}
 
 	/** Apply the ordered chain. Order is significant, so it is not sorted. **/

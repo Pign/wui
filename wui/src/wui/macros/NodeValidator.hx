@@ -243,7 +243,8 @@ class NodeValidator {
 			case "KFloat": ctor == "PFloat";
 			case "KBool": ctor == "PBool";
 			case "KCallback": ctor == "PCallback" || ctor == "PCallbackString"
-				|| ctor == "PCallbackFloat" || ctor == "PCallbackInt";
+				|| ctor == "PCallbackFloat" || ctor == "PCallbackInt"
+				|| ctor == "PCallbackBool";
 			case _: true;
 		};
 	}
@@ -254,7 +255,7 @@ class NodeValidator {
 			case "KInt": "PInt";
 			case "KFloat": "PFloat";
 			case "KBool": "PBool";
-			case "KCallback": "PCallback (ou PCallbackString/Float/Int)";
+			case "KCallback": "PCallback (or PCallbackString/Float/Int/Bool)";
 			case _: kind;
 		};
 	}

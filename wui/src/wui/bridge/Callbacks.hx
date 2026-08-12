@@ -108,10 +108,16 @@ class Callbacks {
 	// Three ranges rather than one shared counter: the cost is a few lines, and
 	// the alternative is an id from one world reaching a closure from another.
 
-	static var nodeHandlers:Array<Void->Void> = [];
+	// Typed as `Dynamic` because a handler is not always nullary. A control that
+	// carries a value hands it back -- the text in the field at the moment of the
+	// keystroke, the state of the switch at the moment of the tap -- and that
+	// value has to reach the closure. One table rather than four keeps a single
+	// id space: an id names a (node, property) slot whatever shape its handler
+	// has, so the four entry points below can never disagree about who id 3 is.
+	static var nodeHandlers:Array<Dynamic> = [];
 
 	/** Add a node property handler and return its id. **/
-	public static function registerNode(fn:Void->Void):Int {
+	public static function registerNode(fn:Dynamic):Int {
 		nodeHandlers.push(fn);
 		return nodeHandlers.length - 1;
 	}
@@ -134,7 +140,7 @@ class Callbacks {
 		grow this table for as long as the app runs. The control keeps pointing at
 		the same id; only what the id means changes.
 	**/
-	public static function setNode(id:Int, fn:Void->Void):Void {
+	public static function setNode(id:Int, fn:Dynamic):Void {
 		if (id < 0 || id >= nodeHandlers.length) {
 			trace('[wui] setNode: id $id out of range');
 			return;
@@ -144,10 +150,45 @@ class Callbacks {
 
 	/** Run a node property handler. **/
 	public static function invokeNode(id:Int):Void {
+		var fn = nodeHandler(id);
+		if (fn != null) fn();
+	}
+
+	/**
+		Run a handler with the value its control just reported.
+
+		Four entry points rather than one taking `Dynamic`: what crosses from C++
+		is a C type, and choosing the Haxe one at the boundary is what keeps a
+		text field's contents from arriving as a printed number. The control is
+		the authority on its own value -- that is the whole reason the contract
+		hands it back instead of letting Haxe assume what it wrote is still there.
+	**/
+	public static function invokeNodeString(id:Int, value:String):Void {
+		var fn = nodeHandler(id);
+		if (fn != null) fn(value == null ? "" : value);
+	}
+
+	public static function invokeNodeFloat(id:Int, value:Float):Void {
+		var fn = nodeHandler(id);
+		if (fn != null) fn(value);
+	}
+
+	public static function invokeNodeInt(id:Int, value:Int):Void {
+		var fn = nodeHandler(id);
+		if (fn != null) fn(value);
+	}
+
+	public static function invokeNodeBool(id:Int, value:Bool):Void {
+		var fn = nodeHandler(id);
+		if (fn != null) fn(value);
+	}
+
+	/** The handler at `id`, or null with a message naming what went wrong. **/
+	static function nodeHandler(id:Int):Null<Dynamic> {
 		if (id < 0 || id >= nodeHandlers.length) {
 			trace('[wui] no node callback for id $id (${nodeHandlers.length} registered)');
-			return;
+			return null;
 		}
-		nodeHandlers[id]();
+		return nodeHandlers[id];
 	}
 }
