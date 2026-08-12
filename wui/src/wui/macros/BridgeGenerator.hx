@@ -171,15 +171,18 @@ class BridgeGenerator {
                 if (winui == null) continue;
 
                 for (entry in wui.nui.Vocabulary.propsFor(type)) {
-                    if (entry.kind != kind) continue;
-                    var call = nodeSetter(entry.winrt, kind, "text", "value");
+                    var valueExpr = incoming(kind, entry.kind);
+                    if (valueExpr == null) continue;
+                    var call = nodeSetter(entry.winrt, entry.kind, "text", valueExpr);
                     if (call == null) continue;
 
                     // Emit against the concrete control and let MSVC check it has
                     // the member. That is what replaced the owner table: a
                     // hand-kept list of which WinRT type declares what, already
                     // wrong about Panel, and failing in silence when it was.
-                    var statement = reassertGuard(entry.winrt, kind == "KString" ? "text" : "value", call);
+                    // A string is compared as the hstring the setter applies,
+                    // not as the raw `const char*` it arrived as.
+                    var statement = reassertGuard(entry.winrt, entry.kind == "KString" ? "text" : valueExpr, call);
                     src.add("    if (t == \"" + type + "\" && k == \"" + entry.name + "\") {\n");
                     src.add("        if (auto c = e.try_as<winrt_controls::" + winui + ">()) { " + statement + " }\n");
                     src.add("        return;\n    }\n");
@@ -394,6 +397,32 @@ class BridgeGenerator {
         The WinRT call for one property, or `null` when the node path cannot make
         it yet -- reported by its absence rather than emitted wrong.
     **/
+    /**
+        How a value arriving through the `kind` entry point reaches a `declared`
+        member, or null when that entry point has no business setting it.
+
+        **A number does not know which of the two it is.** Haxe answers
+        `Std.isOfType(1.0, Int)` with `true` — a Float with nothing after the
+        decimal point *is* an integer value — so a describing layer holding
+        `Dynamic` sends `max = 1.0` through the integer entry point. Matching
+        each entry point to its own declared kind meant that call found no
+        branch and vanished: a slider kept WinUI's default maximum of 100, drew
+        a value of 0.4 as a thumb pinned to the left, and said nothing.
+
+        Which C type a number crossed as is an accident of the value. What it
+        has to become is written on the member, so the two numeric entry points
+        accept each other's properties and convert. Strings and booleans stay
+        matched exactly: neither has a form the other can be mistaken for.
+    **/
+    static function incoming(kind:String, declared:String):Null<String> {
+        if (kind == declared) return "value";
+        return switch [kind, declared] {
+            case ["KInt", "KFloat"]: "(double)value";
+            case ["KFloat", "KInt"]: "(int)value";
+            case _: null;
+        };
+    }
+
     /**
         Never re-assert a value a control already has.
 
