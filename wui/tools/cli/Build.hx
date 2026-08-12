@@ -55,11 +55,27 @@ class Build {
 
         // Step 1: Run Haxe compilation
         Sys.println("[1/3] Compiling Haxe...");
-        var buildHxml = Path.join([cwd, "build.hxml"]);
-        if (!FileSystem.exists(buildHxml)) {
-            Sys.println("Error: build.hxml not found.");
+        // This backend's own build file, or the generic one.
+        //
+        // Compiling `build.hxml` unconditionally is right for a project
+        // targeting one backend, and quietly wrong for one targeting several.
+        // `mui`'s kitchen sink has three, and the generic name could only
+        // belong to one of them -- so the other tools compiled that one's
+        // target, packaged whatever artefact was already lying about, and
+        // reported success. A backend that had not compiled in months looked
+        // healthy, which is how this was found on aui rather than here.
+        //
+        // The generic name still works, and is what a single-target project
+        // keeps.
+        var buildFile = null;
+        for (name in ["build-wui.hxml", "build.hxml"]) {
+            if (FileSystem.exists(Path.join([cwd, name]))) { buildFile = name; break; }
+        }
+        if (buildFile == null) {
+            Sys.println("Error: no build file. Looked for build-wui.hxml, then build.hxml.");
             Sys.exit(1);
         }
+        Sys.println('  Compiling $buildFile');
 
         // Three defines make hxcpp produce something a WinUI project can link.
         // Each was found by a link error, in this order:
@@ -79,7 +95,7 @@ class Build {
             case _: "HXCPP_M64";
         };
         var haxeResult = runCommand(cwd, "haxe", [
-            "build.hxml", "-D", "static_link", "-D", archDefine, "-D", "ABI=-MD"
+            buildFile, "-D", "static_link", "-D", archDefine, "-D", "ABI=-MD"
         ], verbose);
         if (haxeResult != 0) {
             Sys.println("Error: Haxe compilation failed.");
