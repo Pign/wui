@@ -232,6 +232,31 @@ class BridgeGenerator {
         src.add("                    wui_bridge_invoke_node_float(callbackId, s.Value());\n                }\n");
         src.add("            });\n        }\n        return;\n    }\n\n");
 
+        // A selection reports the **index**, not the item. Haxe describes a list
+        // of sections and knows them by position; handing back an opaque WinRT
+        // object would make the application look one up in a collection it never
+        // built. Both controls select by item and both are asked where that item
+        // sits, which is the translation the setter does in the other direction.
+        src.add("    if (k == \"onSelect\") {\n");
+        src.add("        if (auto nav = e.try_as<winrt_controls::NavigationView>()) {\n");
+        src.add("            if (g_valueTokens[h].value != 0) { nav.SelectionChanged(g_valueTokens[h]); }\n");
+        src.add("            g_valueTokens[h] = nav.SelectionChanged([callbackId](auto const& sender, auto const& args) {\n");
+        src.add("                auto n = sender.template try_as<winrt_controls::NavigationView>();\n");
+        src.add("                if (n == nullptr) return;\n");
+        src.add("                uint32_t index = 0;\n");
+        src.add("                if (n.MenuItems().IndexOf(args.SelectedItem(), index)) {\n");
+        src.add("                    wui_bridge_invoke_node_int(callbackId, (int)index);\n                }\n");
+        src.add("            });\n            return;\n        }\n");
+        src.add("        if (auto bar = e.try_as<winrt_controls::SelectorBar>()) {\n");
+        src.add("            if (g_valueTokens[h].value != 0) { bar.SelectionChanged(g_valueTokens[h]); }\n");
+        src.add("            g_valueTokens[h] = bar.SelectionChanged([callbackId](auto const& sender, auto const&) {\n");
+        src.add("                auto b = sender.template try_as<winrt_controls::SelectorBar>();\n");
+        src.add("                if (b == nullptr) return;\n");
+        src.add("                uint32_t index = 0;\n");
+        src.add("                if (b.Items().IndexOf(b.SelectedItem(), index)) {\n");
+        src.add("                    wui_bridge_invoke_node_int(callbackId, (int)index);\n                }\n");
+        src.add("            });\n            return;\n        }\n        return;\n    }\n\n");
+
         src.add("    OutputDebugStringA(\"[wui] callback ignored: no event on this control reports it\\n\");\n}\n\n");
 
         src.add("extern \"C\" void wui_node_modifier(int h, const char* type, const char* modType, double f0, const char* s0) {\n");
@@ -266,6 +291,26 @@ class BridgeGenerator {
         src.add("        uint32_t i = index < 0 ? n : (uint32_t)index;\n");
         src.add("        if (i > n) i = n;\n");
         src.add("        tabs.TabItems().InsertAt(i, c);\n        return;\n    }\n\n");
+        // A NavigationView takes its children in two different places, and which
+        // one is decided by the child's own type: the pane holds the items, the
+        // Content holds the one section showing. That is the difference between
+        // it and a TabView, where every content is present at once because every
+        // item carries one.
+        src.add("    if (auto nav = p.try_as<winrt_controls::NavigationView>()) {\n");
+        src.add("        if (auto item = c.try_as<winrt_controls::NavigationViewItem>()) {\n");
+        src.add("            uint32_t n = nav.MenuItems().Size();\n");
+        src.add("            uint32_t i = index < 0 ? n : (uint32_t)index;\n");
+        src.add("            if (i > n) i = n;\n");
+        src.add("            nav.MenuItems().InsertAt(i, item);\n        } else {\n");
+        src.add("            nav.Content(c);\n        }\n        return;\n    }\n\n");
+
+        src.add("    if (auto bar = p.try_as<winrt_controls::SelectorBar>()) {\n");
+        src.add("        if (auto item = c.try_as<winrt_controls::SelectorBarItem>()) {\n");
+        src.add("            uint32_t n = bar.Items().Size();\n");
+        src.add("            uint32_t i = index < 0 ? n : (uint32_t)index;\n");
+        src.add("            if (i > n) i = n;\n");
+        src.add("            bar.Items().InsertAt(i, item);\n        }\n        return;\n    }\n\n");
+
         src.add("    // Single-content containers: there is nothing for `index` to order,\n");
         src.add("    // and a second child replaces the first rather than joining it.\n");
         src.add("    if (auto border = p.try_as<winrt_controls::Border>()) { border.Child(c); return; }\n");
@@ -283,6 +328,19 @@ class BridgeGenerator {
         src.add("        uint32_t index = 0;\n");
         src.add("        if (tabs.TabItems().IndexOf(c, index)) tabs.TabItems().RemoveAt(index);\n");
         src.add("        return;\n    }\n\n");
+        src.add("    if (auto nav = p.try_as<winrt_controls::NavigationView>()) {\n");
+        src.add("        if (auto item = c.try_as<winrt_controls::NavigationViewItem>()) {\n");
+        src.add("            uint32_t index = 0;\n");
+        src.add("            if (nav.MenuItems().IndexOf(item, index)) nav.MenuItems().RemoveAt(index);\n");
+        src.add("        } else if (nav.Content() == c) {\n            nav.Content(nullptr);\n        }\n");
+        src.add("        return;\n    }\n\n");
+
+        src.add("    if (auto bar = p.try_as<winrt_controls::SelectorBar>()) {\n");
+        src.add("        if (auto item = c.try_as<winrt_controls::SelectorBarItem>()) {\n");
+        src.add("            uint32_t index = 0;\n");
+        src.add("            if (bar.Items().IndexOf(item, index)) bar.Items().RemoveAt(index);\n        }\n");
+        src.add("        return;\n    }\n\n");
+
         src.add("    // Emptied rather than searched: a single-content container holds this\n");
         src.add("    // child or it holds nothing, and clearing one it does not hold would\n");
         src.add("    // throw away a sibling that is still on screen.\n");
@@ -355,9 +413,34 @@ class BridgeGenerator {
         return switch (member) {
             case "Text" | "IsOn" | "Value":
                 "if (c." + member + "() != " + valueExpr + ") { c." + call + "; }";
+
+            // Selecting by index is a lookup, so it is a statement rather than a
+            // call and `call` is not used. Both controls select by item; Haxe
+            // knows its sections by position, and this is where the two meet.
+            case "SelectedIndex":
+                selectByIndex("MenuItems", valueExpr);
+            case "SelectedItemIndex":
+                selectByIndex("Items", valueExpr);
+
             case _:
                 "c." + call + ";";
         };
+    }
+
+    /**
+        Select the item at `valueExpr`, unless it is already the selected one.
+
+        The guard is what keeps a tap from being fought. Selecting a section
+        raises `SelectionChanged`, which tells Haxe, which re-renders and pushes
+        the index back -- and re-selecting an item WinUI has already selected
+        raises the event again. Comparing first turns that loop into one pass.
+    **/
+    static function selectByIndex(collection:String, valueExpr:String):String {
+        return "{ uint32_t cur = 0;"
+            + " bool have = c." + collection + "().IndexOf(c.SelectedItem(), cur);"
+            + " if ((!have || (int)cur != " + valueExpr + ")"
+            + " && (uint32_t)" + valueExpr + " < c." + collection + "().Size())"
+            + " { c.SelectedItem(c." + collection + "().GetAt(" + valueExpr + ")); } }";
     }
 
     public static function nodeSetter(member:String, kind:String, textExpr:String, valueExpr:String):Null<String> {
@@ -366,6 +449,20 @@ class BridgeGenerator {
                 member + "(wui::runtime::brushFromName(" + valueExpr + "))";
             case "Orientation":
                 member + "(std::string(" + valueExpr + ") == \"Horizontal\" ? winrt_controls::Orientation::Horizontal : winrt_controls::Orientation::Vertical)";
+
+            // Two more enums, declared as strings on the Haxe side because that
+            // is what a view can carry. `Top` is the mode that reads like tabs;
+            // anything else falls back to WinUI's own choice rather than to a
+            // mode picked here by accident.
+            case "PaneDisplayMode":
+                member + "(std::string(" + valueExpr + ") == \"Top\" ? winrt_controls::NavigationViewPaneDisplayMode::Top"
+                    + " : std::string(" + valueExpr + ") == \"Left\" ? winrt_controls::NavigationViewPaneDisplayMode::Left"
+                    + " : std::string(" + valueExpr + ") == \"LeftMinimal\" ? winrt_controls::NavigationViewPaneDisplayMode::LeftMinimal"
+                    + " : winrt_controls::NavigationViewPaneDisplayMode::Auto)";
+            case "IsBackButtonVisible":
+                member + "(std::string(" + valueExpr + ") == \"Visible\" ? winrt_controls::NavigationViewBackButtonVisible::Visible"
+                    + " : std::string(" + valueExpr + ") == \"Auto\" ? winrt_controls::NavigationViewBackButtonVisible::Auto"
+                    + " : winrt_controls::NavigationViewBackButtonVisible::Collapsed)";
             // Both take an IInspectable, not a string: WinUI lets a header or a
             // content be any element, and a string has to be boxed to become
             // one. Passing the hstring compiled to "no overloaded function
