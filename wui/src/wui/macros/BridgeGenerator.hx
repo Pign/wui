@@ -189,25 +189,55 @@ class BridgeGenerator {
         src.add("    (void)h; (void)type; (void)f0; (void)s0;\n");
         src.add("    OutputDebugStringA(\"[wui] modifier ignored: wui has properties, not modifiers\\n\");\n}\n\n");
 
+        // A parent holds its children in whichever place its own WinRT type
+        // provides, and there are four such places -- not one. Handling only
+        // `Panel` and returning silently for the rest is what drew the kitchen
+        // sink as a lone "+": a TabView keeps its pages in `TabItems`, so every
+        // tab was dropped, and WinUI renders a TabView with no items as nothing
+        // but its add-tab button. A ScrollViewer and a Border lost their content
+        // the same way, one level further down.
         src.add("extern \"C\" void wui_node_insert(int parent, int child, int index) {\n");
         src.add("    auto p = at(parent);\n    auto c = at(child);\n");
-        src.add("    if (p == nullptr || c == nullptr) return;\n");
-        src.add("    auto panel = p.try_as<winrt_controls::Panel>();\n");
-        src.add("    if (panel == nullptr) return;\n\n");
-        src.add("    // WinUI can place a child at a chosen index. Silica cannot -- its\n");
-        src.add("    // positioners append -- which is why the contract keeps this parameter\n");
-        src.add("    // rather than dropping it for its first adopter.\n");
-        src.add("    uint32_t n = panel.Children().Size();\n");
-        src.add("    uint32_t i = index < 0 ? n : (uint32_t)index;\n");
-        src.add("    if (i > n) i = n;\n    panel.Children().InsertAt(i, c);\n}\n\n");
+        src.add("    if (p == nullptr || c == nullptr) return;\n\n");
+        src.add("    // A panel is the only shape with an ordered list, so it is the only\n");
+        src.add("    // one that can honour `index`. WinUI can place a child at a chosen\n");
+        src.add("    // position; Silica cannot -- its positioners append -- which is why\n");
+        src.add("    // the contract keeps this parameter rather than dropping it for its\n");
+        src.add("    // first adopter.\n");
+        src.add("    if (auto panel = p.try_as<winrt_controls::Panel>()) {\n");
+        src.add("        uint32_t n = panel.Children().Size();\n");
+        src.add("        uint32_t i = index < 0 ? n : (uint32_t)index;\n");
+        src.add("        if (i > n) i = n;\n");
+        src.add("        panel.Children().InsertAt(i, c);\n        return;\n    }\n\n");
+        src.add("    if (auto tabs = p.try_as<winrt_controls::TabView>()) {\n");
+        src.add("        uint32_t n = tabs.TabItems().Size();\n");
+        src.add("        uint32_t i = index < 0 ? n : (uint32_t)index;\n");
+        src.add("        if (i > n) i = n;\n");
+        src.add("        tabs.TabItems().InsertAt(i, c);\n        return;\n    }\n\n");
+        src.add("    // Single-content containers: there is nothing for `index` to order,\n");
+        src.add("    // and a second child replaces the first rather than joining it.\n");
+        src.add("    if (auto border = p.try_as<winrt_controls::Border>()) { border.Child(c); return; }\n");
+        src.add("    if (auto holder = p.try_as<winrt_controls::ContentControl>()) { holder.Content(c); return; }\n\n");
+        src.add("    OutputDebugStringA(\"[wui] insert: this parent has nowhere to put a child\\n\");\n}\n\n");
 
         src.add("extern \"C\" void wui_node_remove(int parent, int child) {\n");
         src.add("    auto p = at(parent);\n    auto c = at(child);\n");
-        src.add("    if (p == nullptr || c == nullptr) return;\n");
-        src.add("    auto panel = p.try_as<winrt_controls::Panel>();\n");
-        src.add("    if (panel == nullptr) return;\n\n");
-        src.add("    uint32_t index = 0;\n");
-        src.add("    if (panel.Children().IndexOf(c, index)) { panel.Children().RemoveAt(index); }\n}\n\n");
+        src.add("    if (p == nullptr || c == nullptr) return;\n\n");
+        src.add("    if (auto panel = p.try_as<winrt_controls::Panel>()) {\n");
+        src.add("        uint32_t index = 0;\n");
+        src.add("        if (panel.Children().IndexOf(c, index)) panel.Children().RemoveAt(index);\n");
+        src.add("        return;\n    }\n\n");
+        src.add("    if (auto tabs = p.try_as<winrt_controls::TabView>()) {\n");
+        src.add("        uint32_t index = 0;\n");
+        src.add("        if (tabs.TabItems().IndexOf(c, index)) tabs.TabItems().RemoveAt(index);\n");
+        src.add("        return;\n    }\n\n");
+        src.add("    // Emptied rather than searched: a single-content container holds this\n");
+        src.add("    // child or it holds nothing, and clearing one it does not hold would\n");
+        src.add("    // throw away a sibling that is still on screen.\n");
+        src.add("    if (auto border = p.try_as<winrt_controls::Border>()) {\n");
+        src.add("        if (border.Child() == c) border.Child(nullptr);\n        return;\n    }\n\n");
+        src.add("    if (auto holder = p.try_as<winrt_controls::ContentControl>()) {\n");
+        src.add("        if (holder.Content() == c) holder.Content(nullptr);\n        return;\n    }\n}\n\n");
 
         src.add("extern \"C\" void wui_node_destroy(int h) {\n");
         src.add("    if (h <= 0 || h >= (int)g_nodes.size()) return;\n");

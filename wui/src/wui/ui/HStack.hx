@@ -20,7 +20,9 @@ class HStack extends Stack {
 	@:winrt("Orientation") public var orientation:String = "Horizontal";
 
     public function new(children:Array<View>, ?spacing:Float) {
-        super("StackPanel", children);
+        // The class name, not the WinRT type -- see `VStack`, which explains
+        // what the two stacks sharing one name cost.
+        super("HStack", children);
         // orientation carries its declared default
         if (spacing != null) this.spacing = spacing;
     }
