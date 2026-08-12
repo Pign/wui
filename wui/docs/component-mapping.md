@@ -9,9 +9,9 @@ This table maps concepts from [sui](https://github.com/user/sui) (Haxe-to-SwiftU
 | `Text` -> `SwiftUI.Text` | `Text` -> `TextBlock` | Same API. wui uses `TextBlock` (WinUI's read-only text control). |
 | `Button` -> `SwiftUI.Button` | `Button` -> `Button` | Both accept a label and action. wui adds optional `icon` parameter. |
 | `VStack` -> `VStack` | `VStack` -> `StackPanel` (Vertical) | Identical API. Different native control. |
-| `HStack` -> `HStack` | `HStack` -> `StackPanel` (Horizontal) | Identical API. |
+| `HStack` -> `HStack` | `HStack` -> `Grid` (columns) | Identical API. A Grid, not a StackPanel: a panel hands each child the size it asks for and distributes nothing, so a `Spacer` in it came out zero wide. Each child gets a column, `Auto` for content and `*` for a spacer. |
 | `ZStack` -> `ZStack` | `ZStack` -> `Grid` (overlapping) | WinUI has no ZStack; wui uses a Grid with children in the same cell. |
-| `Spacer` -> `Spacer` | `Spacer` -> `Border` (stretch) | Same concept. WinUI implementation uses a stretching Border. |
+| `Spacer` -> `Spacer` | `Spacer` -> `Border` (a starred column) | Same concept. An empty Border, tagged so the `HStack` around it gives its column the leftover width. In a `VStack` it takes none: a StackPanel cannot distribute height, and saying so beats a spacer that works in one direction only. |
 | `TextField` -> `TextField` | `TextBox` -> `TextBox` | Named `TextBox` to match WinUI naming. |
 | `Toggle` -> `Toggle` | `ToggleSwitch` -> `ToggleSwitch` | Named `ToggleSwitch` to match WinUI naming. |
 | `Slider` -> `Slider` | `Slider` -> `Slider` | Same API. |
@@ -21,9 +21,12 @@ This table maps concepts from [sui](https://github.com/user/sui) (Haxe-to-SwiftU
 | `Picker` -> `Picker` | `ComboBox` -> `ComboBox` | WinUI equivalent of a dropdown picker. |
 | -- | `CheckBox` -> `CheckBox` | WinUI-specific. SwiftUI uses Toggle with a checkbox style. |
 | `ProgressView` -> `ProgressView` | `ProgressRing` -> `ProgressRing` | WinUI uses a ring by default. |
-| `NavigationStack` -> `NavigationStack` | `NavigationView` -> `NavigationView` | WinUI uses a sidebar-based NavigationView. |
+| `NavigationStack` -> `NavigationStack` | `NavigationView` -> `NavigationView` | A few top-level sections, in `Top` mode by default so it reads the way tabs read elsewhere. It owns its selection in a shared cell, as sui's renderer does — so an app that says nothing about selection still gets working tabs. One navigation bar per application. |
 | -- | `ContentDialog` -> `ContentDialog` | WinUI-specific modal dialog. SwiftUI uses `.alert()` / `.sheet()`. |
-| `TabView` -> `TabView` | `TabView` -> `TabView` | Same concept, different native control. |
+| `TabView` -> `TabView` | `TabView` -> `TabView` | Document tabs: each carries a close button and the strip offers a "+". Right for things a user opens and closes. **`mui.ui.TabView` maps to `NavigationView` instead**, because the sections of an app can be neither closed nor added. |
+| -- | `SelectorBar` -> `SelectorBar` | wui-specific segmented selector: not which section of the app you are in, but which of several views of one page. No `mui` equivalent, and not looking for one. |
+| -- | `TabViewItem` -> `TabViewItem` | A `TabView` holds items, not contents. Built by `TabView`'s constructor; you rarely write one. |
+| -- | `Border` -> `Border` | WinUI has neither separator nor spacer, and both **are** a border. |
 | `DisclosureGroup` -> `DisclosureGroup` | `Expander` -> `Expander` | WinUI equivalent of collapsible sections. |
 | -- | `InfoBar` -> `InfoBar` | WinUI-specific notification bar. No direct SwiftUI equivalent. |
 | `ForEach` -> `ForEach` | `ForEach` | Same API. |

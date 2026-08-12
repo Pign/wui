@@ -60,6 +60,14 @@ wui build [options]
 
 Compile the project through the full pipeline:
 
+> **Which build file.** The tool reads `build-wui.hxml` if it is there, and
+> `build.hxml` otherwise, and prints the one it compiled. A single-target
+> project keeps the generic name; a project targeting several backends gives
+> each its own, because that name can only belong to one of them -- and the
+> tools that read it unconditionally compiled another backend's target,
+> packaged whatever artefact was already lying about, and reported success.
+
+
 | Step | What happens |
 |------|--------------|
 | **1/4** Haxe compilation | Runs `haxe build.hxml`. The WinUIGenerator macro emits C++/WinRT source into `build/winui/`. |
