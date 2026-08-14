@@ -56,6 +56,27 @@ class Vocabulary {
 	static var cache:Map<String, Map<String, String>> = null;
 
 	/** Does `wui` know how to build this node type? **/
+	/**
+		Hand `mui` this vocabulary, from `wui`'s own build file:
+
+		```
+		--macro wui.nui.Vocabulary.registerWithMui()
+		```
+
+		`mui` cannot look this up the way it looks up a type, because a macro
+		cannot call a function it does not name. So the naming happens here,
+		where it is `wui` naming itself — and `mui` keeps no list of backends.
+	**/
+	public static function registerWithMui():Void {
+		mui.macros.Backend.register({
+			knows: knows,
+			keysOf: keysOf,
+			requiredOf: requiredOf,
+			kindOf: kindOf,
+			types: types,
+		});
+	}
+
 	public static function knows(type:String):Bool {
 		return all().exists(type);
 	}

@@ -31,7 +31,7 @@ class App extends wui.App {
         Either shape of application answers it. An app that overrides `view()`
         describes nodes directly, and that is handed to the sink. An app that
         overrides `body()` — the shape the other three backends take — has its
-        view tree *described* as nodes by `mui.nui.FromViews`.
+        view tree *described* as nodes by `wui.mui.FromViews`.
 
         Before this, `body()` was a stub the push renderer never called: an app
         written the ordinary way compiled for wui and drew an empty window,
@@ -40,7 +40,7 @@ class App extends wui.App {
     public function nuiBody():nui.Node {
         var declared = view();
         if (declared != null && !isEmptyRoot(declared)) return declared;
-        return mui.nui.FromViews.describe(body());
+        return wui.mui.FromViews.describe(body());
     }
 
     /** The placeholder `view()` returns when an app never overrode it. **/

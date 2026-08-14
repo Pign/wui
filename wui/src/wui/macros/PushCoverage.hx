@@ -37,7 +37,7 @@ class PushCoverage {
 		Expanded before the sink sees them, so never asked of it.
 
 		A `ForEach` is a loop that yields siblings and a `ConditionalView` is the
-		branch its condition picks. `mui.nui.FromViews` replaces both while it
+		branch its condition picks. `wui.mui.FromViews` replaces both while it
 		describes the tree, so demanding a WinRT control for either would be
 		asking for one that cannot exist. The other two backends exempt the same
 		pair, for the same reason.
