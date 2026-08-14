@@ -1,0 +1,18 @@
+# What `mui init` writes as `build-wui.hxml`.
+#
+# It lives here rather than in `mui` because what a build for this backend needs
+# -- which libraries, which generator macro, which output -- is ours to state,
+# and `mui` had no way of keeping six of these honest. `$MAIN` is the only thing
+# substituted.
+-cp src
+-lib mui
+-lib wui
+-lib nui
+-lib rui
+-D mui_backend=wui
+--macro rui.macros.ViewRule.register("mui.App", "body")
+--macro wui.macros.WinUIGenerator.register()
+--macro mui.macros.Bind.all()
+--macro wui.nui.Vocabulary.registerWithMui()
+--main $MAIN
+-cpp build/wui
