@@ -57,7 +57,7 @@ set rejects.
 A two-way control needs both directions, and the push path had neither until a
 switch bound to a cell holding `true` drew itself `Off`.
 
-**Down** — `mui.nui.FromViews` reads the bound cell while describing the tree,
+**Down** — `wui.mui.FromViews` reads the bound cell while describing the tree,
 and emits its value under whatever that control calls its value.
 `wui.nui.Bindings` holds those names, because they are WinRT's: a switch calls
 it `isOn`, a field `text`, a slider `value`. Reading the cell there is what
