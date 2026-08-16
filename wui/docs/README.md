@@ -76,3 +76,15 @@ wui run
 ```
 
 See the [Getting Started](getting-started.md) guide for full setup instructions.
+
+## Native capabilities
+
+Windows APIs beyond the view vocabulary live in
+[`kui`](https://lapavoiserie.github.io/kui/), keyed by operating system.
+
+The split here is unusual and worth knowing. hxcpp **compiles** but does not
+link: it packs its objects into `lib<App>.lib` and stops, because the `main`
+WinUI provides would clash with hxcpp's. So a capability's `files` are compiled
+through `@:buildXml` as everywhere else, while its `libs` reach a link step that
+never runs — anything that must be *linked* belongs in the `msbuild` section,
+which `ProjectGenerator` renders into the `.vcxproj` and `packages.config`.
