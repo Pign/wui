@@ -16,7 +16,8 @@
     "dependencies": {
         "hxcpp": "",
         "rui": "",
-        "nui": ""
+        "nui": "",
+        "kui": ""
     },
     "contributors": []
 }

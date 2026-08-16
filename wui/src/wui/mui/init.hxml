@@ -7,6 +7,7 @@
 -cp src
 -lib mui
 -lib wui
+-lib kui
 -lib nui
 -lib rui
 -D mui_backend=wui
@@ -14,5 +15,10 @@
 --macro wui.macros.WinUIGenerator.register()
 --macro mui.macros.Bind.all()
 --macro wui.nui.Vocabulary.registerWithMui()
+--macro wui.kui.Platform.registerWithKui()
 --main $MAIN
--cpp build/wui
+# `build/cpp`, and it has to be exactly that: the generated .vcxproj links
+# `..\cpp\lib<App>.lib` relative to `build/winui/`, and `tools/cli/Build.hx`
+# looks for the library at that same path. A different output directory here
+# fails at the link step with a missing .lib and no hint as to why.
+-cpp build/cpp

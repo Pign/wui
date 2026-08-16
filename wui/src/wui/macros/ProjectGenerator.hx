@@ -60,10 +60,61 @@ class ProjectGenerator {
         generateAppManifest(appName, outputDir);
     }
 
+    /**
+        A semicolon-separated MSBuild list, or nothing at all.
+
+        Nothing rather than an empty entry: `%(AdditionalDependencies)` follows
+        these, and a stray `;` in front of it is a library named "" that MSBuild
+        reports much later and much less clearly than it deserves.
+    **/
+    static function joined(values:Array<String>):String
+        return values.length == 0 ? "" : values.join(";") + ";";
+
+    /**
+        The `.props` / `.targets` imports for the NuGet packages capabilities asked
+        for.
+
+        The path is a **convention** — `<id>.<version>\build\native\<id>.<what>` —
+        which the three packages `wui` already imports follow, and which most native
+        NuGet packages follow because that is what the tooling generates. It is not
+        a guarantee, so each import carries the same `Condition="Exists(…)"` the
+        existing ones do: a package that stores its props elsewhere contributes
+        nothing instead of failing the build with a missing-file error.
+
+        Restoring the package is a separate step from importing it: the id and
+        version also go into `packages.config`, which is what `nuget restore`
+        actually reads.
+    **/
+    static function nugetImports(packagesDir:String, kui:kui.build.Sidecar, what:String):String {
+        var lines = [];
+        for (package_ in kui.objects("msbuild", "nuget")) {
+            var id:String = Reflect.field(package_, "id");
+            var version:String = Reflect.field(package_, "version");
+            if (id == null || version == null) continue;
+            var path = packagesDir + "\\" + id + "." + version
+                + "\\build\\native\\" + id + "." + what;
+            lines.push('  <Import Project="' + path
+                + '" Condition="Exists(\'' + path + '\')" />');
+        }
+        return lines.join("\n");
+    }
+
     static function generateVcxproj(appName:String, outputDir:String):Void {
         // Paths relative to the .vcxproj location (build/winui/)
         var cppDir = "..\\cpp";
         var packagesDir = "..\\packages";
+
+        var kui = kui.macros.Emit.current();
+        var kuiIncludes = joined(kui.strings("msbuild", "includes"));
+        var kuiLibs = joined(kui.strings("msbuild", "libs"));
+        var kuiSources = [
+            for (source in kui.strings("msbuild", "sources"))
+                '    <ClCompile Include="' + source + '">\n'
+                + "      <PrecompiledHeader>NotUsing</PrecompiledHeader>\n"
+                + "    </ClCompile>"
+        ].join("\n");
+        var kuiPackageProps = nugetImports(packagesDir, kui, "props");
+        var kuiPackageTargets = nugetImports(packagesDir, kui, "targets");
 
         var content = '<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -114,12 +165,13 @@ class ProjectGenerator {
   <!-- NuGet package props -->
   <Import Project="$packagesDir\\Microsoft.Windows.CppWinRT.2.0.240405.15\\build\\native\\Microsoft.Windows.CppWinRT.props" Condition="Exists(\'$packagesDir\\Microsoft.Windows.CppWinRT.2.0.240405.15\\build\\native\\Microsoft.Windows.CppWinRT.props\')" />
   <Import Project="$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.props" Condition="Exists(\'$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.props\')" />
+$kuiPackageProps
 
   <ItemDefinitionGroup>
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <AdditionalIncludeDirectories>$cppDir\\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$cppDir\\include;$kuiIncludes%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <SDLCheck>true</SDLCheck>
@@ -133,6 +185,10 @@ class ProjectGenerator {
            by the librarian step (__main__ excluded, its main would clash with
            the one WinUI provides). Absent until that step runs on Windows. -->
       <AdditionalDependencies>$cppDir\\lib${appName}.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- Libraries a kui capability asked for. hxcpp compiles this build into a
+           static library and never links it, so its own -l flags reach nothing:
+           MSBuild is the only link step there is here. -->
+      <AdditionalDependencies>$kuiLibs%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$cppDir;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
@@ -144,6 +200,7 @@ class ProjectGenerator {
     <ClCompile Include="App.cpp" />
     <ClCompile Include="MainWindow.cpp" />
     <ClCompile Include="WuiNodes.cpp" />
+$kuiSources
   </ItemGroup>
 
   <ItemGroup>
@@ -164,6 +221,7 @@ class ProjectGenerator {
   <Import Project="$packagesDir\\Microsoft.Windows.CppWinRT.2.0.240405.15\\build\\native\\Microsoft.Windows.CppWinRT.targets" Condition="Exists(\'$packagesDir\\Microsoft.Windows.CppWinRT.2.0.240405.15\\build\\native\\Microsoft.Windows.CppWinRT.targets\')" />
   <Import Project="$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.targets" Condition="Exists(\'$packagesDir\\Microsoft.WindowsAppSDK.1.5.240627000\\build\\native\\Microsoft.WindowsAppSDK.targets\')" />
   <Import Project="$packagesDir\\Microsoft.Windows.SDK.BuildTools.10.0.22621.756\\build\\native\\Microsoft.Windows.SDK.BuildTools.targets" Condition="Exists(\'$packagesDir\\Microsoft.Windows.SDK.BuildTools.10.0.22621.756\\build\\native\\Microsoft.Windows.SDK.BuildTools.targets\')" />
+$kuiPackageTargets
 
 
 </Project>
@@ -172,12 +230,23 @@ class ProjectGenerator {
     }
 
     static function generatePackagesConfig(outputDir:String):Void {
+        // What `nuget restore` reads. The matching <Import> lines in the .vcxproj
+        // are written by `nugetImports`; a package needs both, because restoring
+        // it and importing its build logic are two different steps.
+        var kuiPackages = [
+            for (package_ in kui.macros.Emit.current().objects("msbuild", "nuget"))
+                '  <package id="' + Reflect.field(package_, "id")
+                + '" version="' + Reflect.field(package_, "version")
+                + '" targetFramework="native" />'
+        ].join("\n");
+
         var content = '<?xml version="1.0" encoding="utf-8"?>
 <packages>
   <package id="Microsoft.WindowsAppSDK" version="1.5.240627000" targetFramework="native" />
   <package id="Microsoft.Windows.CppWinRT" version="2.0.240405.15" targetFramework="native" />
   <package id="Microsoft.Windows.SDK.BuildTools" version="10.0.22621.756" targetFramework="native" />
   <package id="Microsoft.Windows.ImplementationLibrary" version="1.0.240122.1" targetFramework="native" />
+$kuiPackages
 </packages>
 ';
         writeIfChanged(Path.join([outputDir, "packages.config"]), content);
