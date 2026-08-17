@@ -60,7 +60,7 @@ import wui.bridge.Callbacks;
 	`qui` validated on device.
 
 	```haxe
-	sink.bindReactive = fn -> new rui.Signal.Effect(fn);
+	sink.bindReactive = fn -> { var e = new rui.Signal.Effect(fn); () -> e.dispose(); };
 	```
 **/
 #if (cpp && wui_winui)
@@ -82,9 +82,21 @@ extern "C" void wui_node_destroy(int h);
 #end
 @:keep
 class WinUISink implements NodeSink<Int> {
-	var _bind:(Void->Void)->Void = function(fn) fn();
+	var _bind:(Void->Void)->Null<Void->Void> = function(fn) { fn(); return null; };
 
-	public var bindReactive(get, set):(Void->Void)->Void;
+	/**
+		How to undo every binding made against a handle, so `destroy` can.
+
+		Kept here rather than by the reconciler because this is where a binding
+		is made and where the handle is known. The reconciler disposes the effect
+		that owns a *list*; these are the effects that own a single property, and
+		they are subscribed to signals that routinely outlive the node — a write
+		after the node is gone would otherwise apply a property to a freed
+		handle.
+	**/
+	var _bindings:Map<Int, Array<Void->Void>> = new Map();
+
+	public var bindReactive(get, set):(Void->Void)->Null<Void->Void>;
 
 	function get_bindReactive()
 		return _bind;
@@ -126,7 +138,7 @@ class WinUISink implements NodeSink<Int> {
 		the effect re-reads it.
 	**/
 	public function applyProp(target:Int, type:String, key:String, value:PropValue):Void {
-		_bind(function() {
+		remember(target, _bind(function() {
 			var resolved = PropValueTools.resolve(value);
 			if (resolved == null) return;
 
@@ -160,7 +172,18 @@ class WinUISink implements NodeSink<Int> {
 					// beats a silent default branch.
 					trace('[wui] $type.$key: PReactive survived resolution');
 			}
-		});
+		}));
+	}
+
+	/** Keep how to undo a binding, if the hook gave one. **/
+	function remember(target:Int, stop:Null<Void->Void>):Void {
+		if (stop == null) return;
+		var made = _bindings.get(target);
+		if (made == null) {
+			made = [];
+			_bindings.set(target, made);
+		}
+		made.push(stop);
 	}
 
 	/**
@@ -204,6 +227,14 @@ class WinUISink implements NodeSink<Int> {
 	}
 
 	public function destroy(target:Int):Void {
+		// Bindings first, handle second. A binding stopped after the handle is
+		// freed is one that may still fire against it in between.
+		var made = _bindings.get(target);
+		if (made != null) {
+			_bindings.remove(target);
+			for (stop in made)
+				try stop() catch (e:Dynamic) trace("[wui] binding teardown: " + e);
+		}
 		nativeDestroy(target);
 	}
 
