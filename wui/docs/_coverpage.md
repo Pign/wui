@@ -7,7 +7,7 @@
 - Declarative UI with Haxe's type-safe DSL
 - Compiles to native C++/WinRT — no web views, no wrappers
 - Self-contained .exe with full WinUI 3 controls
-- Inspired by [Pign/sui](https://github.com/Pign/sui) for SwiftUI
+- Inspired by [sui](https://github.com/lapavoiserie/sui) for SwiftUI
 
 [Get Started](getting-started.md)
-[GitHub](https://github.com/Pign/wui)
+[GitHub](https://github.com/lapavoiserie/wui)

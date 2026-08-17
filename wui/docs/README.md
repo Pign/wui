@@ -2,7 +2,7 @@
 
 **Write native WinUI 3 Windows apps in Haxe.**
 
-wui is a framework that compiles Haxe code into native WinUI 3 desktop applications. Inspired by [Pign/sui](https://github.com/Pign/sui) (which targets SwiftUI), wui brings the same declarative approach to Windows.
+wui is a framework that compiles Haxe code into native WinUI 3 desktop applications. Inspired by [sui](https://github.com/lapavoiserie/sui) (which targets SwiftUI), wui brings the same declarative approach to Windows.
 
 ## How it works
 

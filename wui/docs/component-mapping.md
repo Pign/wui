@@ -1,6 +1,6 @@
 # Component Mapping: sui (SwiftUI) to wui (WinUI 3)
 
-This table maps concepts from [sui](https://github.com/user/sui) (Haxe-to-SwiftUI for macOS/iOS) to their wui equivalents (Haxe-to-WinUI 3 for Windows).
+This table maps concepts from [sui](https://github.com/lapavoiserie/sui) (Haxe-to-SwiftUI for macOS/iOS) to their wui equivalents (Haxe-to-WinUI 3 for Windows).
 
 ## Views
 
