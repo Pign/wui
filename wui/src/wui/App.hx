@@ -27,7 +27,7 @@ class App {
         backend agrees on: the application is over.
 
         ```haxe
-        lifetime.ownEffect(new Effect(() -> { … Effect.onCleanup(stop); }));
+        lifetime.own(new Effect(() -> { … Effect.onCleanup(stop); }).dispose);
         ```
 
         **A view lifetime exists too**, through `lifetime.keep(key, start)`: it
