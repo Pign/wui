@@ -478,7 +478,6 @@ class HaxeBridge {
 
 		var node:nui.Node = null;
 		try {
-			appInstance.lifetime.beginPass();
 			node = appInstance.nuiBody();
 		} catch (e:Dynamic) {
 			trace('[wui] renderNui: the app has no nuiBody() ($e)');
@@ -500,15 +499,20 @@ class HaxeBridge {
 		// `rerenderNui()` by hand -- framework plumbing in application code, and
 		// on a backend it is not supposed to name.
 		nuiEffect = new rui.Signal.Effect(function() {
+			appInstance.lifetime.beginPass();
 			var tree = appInstance.nuiBody();
 			if (tree == null) {
 				trace("[wui] nuiBody() returned null");
 				return;
 			}
 			nuiTree = nuiReconciler.reconcile(nuiTree, tree, 0);
+			// After reconcile, not after nuiBody(): a node with deferred
+			// children has its thunk run in there, so that is where a component
+			// has finished declaring.
+			appInstance.lifetime.endPass();
 		});
 
-		trace('[wui] nui: arbre monté, ${Callbacks.nodeCount()} gestionnaire(s)');
+		trace('[wui] nui: tree mounted, ${Callbacks.nodeCount()} handler(s)');
 	}
 
 	/**
