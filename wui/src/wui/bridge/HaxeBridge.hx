@@ -478,6 +478,7 @@ class HaxeBridge {
 
 		var node:nui.Node = null;
 		try {
+			appInstance.lifetime.beginPass();
 			node = appInstance.nuiBody();
 		} catch (e:Dynamic) {
 			trace('[wui] renderNui: the app has no nuiBody() ($e)');

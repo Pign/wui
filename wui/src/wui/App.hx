@@ -30,12 +30,11 @@ class App {
         lifetime.ownEffect(new Effect(() -> { … Effect.onCleanup(stop); }));
         ```
 
-        **There is no view lifetime here, and that is not an oversight.** A view
-        disappearing is observable to Haxe only where Haxe reconciles the tree —
-        the push backends — and not at all where the host walks it, which is what
-        `sui` and `aui` do. Offering a hook that fired on two backends and stayed
-        silent on the others would be worse than not offering one.
-    **/
+        **A view lifetime exists too**, through `lifetime.keep(key, start)`: it
+        lasts as long as `body()` keeps declaring that key. Not as long as the
+        view is on screen — those differ, and the difference is deliberate. See
+        `rui.Lifetime.keep`.
+       **/
     public final lifetime = new rui.Lifetime();
 
     public function new() {}
