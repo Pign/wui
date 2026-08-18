@@ -256,6 +256,7 @@ namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 
 // Implemented in the hxcpp library: mounts the Haxe node tree into handle 0.
 extern "C" void wui_bridge_render_nui();
+extern "C" void wui_bridge_pump();
 
 namespace MainWindow {
 
@@ -269,6 +270,16 @@ winrt_xaml::UIElement BuildUI(winrt_xaml::Window const& window)
     wui::nodes::reset(root);
 
     wui_bridge_render_nui();
+
+    // The 100ms beat that lets haxe.Timer fire: WinUI owns the message loop,
+    // so this is the one periodic visit Haxe gets.
+    auto pumpTimer = window.DispatcherQueue().CreateTimer();
+    pumpTimer.Interval(std::chrono::milliseconds(100));
+    pumpTimer.Tick([](auto&&, auto&&) { wui_bridge_pump(); });
+    pumpTimer.Start();
+    // Kept alive by the static: a local timer would be collected with the frame.
+    static winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer s_pumpTimer{ nullptr };
+    s_pumpTimer = pumpTimer;
 
     return root;
 }

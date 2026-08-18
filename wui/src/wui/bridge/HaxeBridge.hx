@@ -167,6 +167,15 @@ extern "C" void wui_bridge_refresh_lists() {
 }
 
 // Mount the Haxe node tree into handle 0, which BuildUI has just registered.
+// Advance the Haxe-side scheduled work. Driven by a 100ms DispatcherQueueTimer
+// in MainWindow.cpp -- the one periodic visit Haxe gets, since WinUI owns the
+// message loop and the Haxe entry point that would pump after main() never
+// runs here. Without it a haxe.Timer an application creates never fires.
+extern "C" void wui_bridge_pump() {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::HaxeBridge_obj::pumpHaxeEvents();
+}
+
 extern "C" void wui_bridge_render_nui() {
     if (!s_wui_haxe_started) return;
     ::wui::bridge::HaxeBridge_obj::renderNui();
@@ -468,6 +477,24 @@ class HaxeBridge {
 		lesson from W5b, where a list pushed before its control existed went
 		nowhere. The app supplies its tree through `nuiBody()`.
 	**/
+	static var _pumpBroken = false;
+
+	/** Called from the host's 100ms tick — see `wui_bridge_pump` above. The
+		same defect on its fifth backend: a `haxe.Timer` registers with the
+		current thread's event loop, and nobody advanced it. Guards and says it
+		once if the thread has no loop at all. **/
+	@:keep public static function pumpHaxeEvents():Void {
+		if (_pumpBroken) return;
+		try {
+			#if (target.threaded && !cppia)
+			sys.thread.Thread.current().events.progress();
+			#end
+		} catch (e:Dynamic) {
+			_pumpBroken = true;
+			trace("[wui] no Haxe event loop on this thread; haxe.Timer will not fire: " + e);
+		}
+	}
+
 	public static function renderNui():Void {
 		Callbacks.resetNodes();
 
