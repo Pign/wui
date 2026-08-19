@@ -163,6 +163,53 @@ On top of the partition's list:
 4. `wui_bridge_dispose_primary()` now tears down auxiliaries before the
    Primary — name unchanged, behaviour widened.
 
+## Commands: the menu bar
+
+A `@:surface(Commands)` declaration becomes a WinUI `MenuBar` — and the whole
+design is that it takes **no new bridge machinery**: WinUI has no window-owned
+menu, `MenuBar` is an ordinary XAML control, so `wui.mui.App.nuiBody()` injects
+it as the first child of the Primary tree (a wrapping `VStack`). Ordinary nodes
+mean the existing pipeline does everything:
+
+- **N menus.** One `MenuBarItem` per CommandSet declaration, titled from the
+  set id (one capital — the same rule as auxiliary window titles). SwiftUI's
+  CommandsBuilder could not produce N menus from a runtime count; a XAML
+  control can.
+- **Live labels, free.** The command thunks are re-sampled on every describe,
+  inside the render effect; a label that reads state re-applies as a `text`
+  prop through the reconciler, on the same node, nothing recreated.
+- **Clicks are Button's path.** A `MenuFlyoutItem`'s `Click` rides the same
+  id-over-the-bridge route (`wui_node_prop_callback` grew a MenuFlyoutItem
+  branch; same token slot — one node is one control, never both).
+- **Chords.** The portable chord names the platform's *primary* modifier — on
+  Windows that IS Ctrl, so `"ctrl+k"` maps literally (macOS maps the same
+  chord to Command); `alt` is Menu, `shift` is Shift; keys are a letter, a
+  digit, or `enter`/`escape`/`tab`. The grammar lives in `wui.mui.Chords`,
+  where a test pins it without a Windows machine; one packed int
+  (`modifiers << 16 | key`, Windows.System's own enum values) crosses under
+  the undeclared prop key `accelerator`, and a hand-written branch in
+  `wui_node_prop_int` unpacks it into a `KeyboardAccelerator` (Clear then
+  Append — a re-render must replace, never accumulate). A chord outside the
+  grammar keeps its item's label and click, said once: on a menu bar,
+  discoverability survives the unparseable chord.
+
+`test/MenuBarCheck.hx` pins the grammar, the described shape, the invoke, the
+chordless and unparseable degradations, and the live label — by node handle,
+so the re-apply is proven to land on the right node.
+
+### ABI deltas, menu bar (same validation pass)
+
+5. new create cases and generated setters for `MenuBar`, `MenuBarItem`
+   (`Title`), `MenuFlyoutItem` (`Text`) — derived from the new `wui.ui.*`
+   declarations, no hand ABI;
+6. `wui_node_prop_callback`: `onClick` now also matches `MenuFlyoutItem`;
+7. `wui_node_prop_int`: hand-written `MenuFlyoutItem`/`accelerator` branch
+   (KeyboardAccelerator from a packed int; `#include <winrt/Windows.System.h>`
+   added to `WuiNodes.cpp`);
+8. `wui_node_insert`/`wui_node_remove`: two new places children live —
+   `MenuBar.Items()` (MenuBarItem) and `MenuBarItem.Items()`
+   (MenuFlyoutItemBase).
+
 ## What is still missing
 
 The transpiled path's own state bridge does not push `TFloat` or `TBool` to the

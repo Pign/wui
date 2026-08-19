@@ -81,6 +81,10 @@ class BridgeGenerator {
 
         var src = new StringBuf();
         src.add("#include \"pch.h\"\n#include \"WuiNodes.h\"\n#include \"WuiRuntime.h\"\n");
+        src.add("// VirtualKey / VirtualKeyModifiers, for the accelerator a MenuFlyoutItem\n");
+        src.add("// carries. pch.h pulls the Xaml headers; the enums live in Windows.System,\n");
+        src.add("// which nothing else here needed until the menu bar.\n");
+        src.add("#include <winrt/Windows.System.h>\n");
         src.add("#include <vector>\n#include <string>\n\n");
         src.add("namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;\n");
         src.add("namespace winrt_xaml = winrt::Microsoft::UI::Xaml;\n\n");
@@ -226,6 +230,26 @@ class BridgeGenerator {
             if (kind == "KString") src.add("    auto text = winrt::hstring(wui::runtime::fromUtf8(value));\n");
             src.add("\n");
 
+            // The one hand-written property: an accelerator is not a member a
+            // generated setter could call -- it becomes a KeyboardAccelerator
+            // (two enums, appended to a collection). The chord GRAMMAR lives in
+            // Haxe (wui.mui.Chords), where a test pins it without a Windows
+            // machine; what crosses is one packed int, unpacked here. Undeclared
+            // on purpose: a @:winrt declaration would emit `c.Accelerator(...)`
+            // and MSVC would rightly refuse the member.
+            if (kind == "KInt") {
+                src.add("    if (t == \"MenuFlyoutItem\" && k == \"accelerator\") {\n");
+                src.add("        if (auto m = e.try_as<winrt_controls::MenuFlyoutItem>()) {\n");
+                src.add("            // Replace, never accumulate: a re-render re-applies the prop,\n");
+                src.add("            // and two identical accelerators would both fire the click.\n");
+                src.add("            m.KeyboardAccelerators().Clear();\n");
+                src.add("            winrt::Microsoft::UI::Xaml::Input::KeyboardAccelerator a;\n");
+                src.add("            a.Key((winrt::Windows::System::VirtualKey)(value & 0xFFFF));\n");
+                src.add("            a.Modifiers((winrt::Windows::System::VirtualKeyModifiers)(value >> 16));\n");
+                src.add("            m.KeyboardAccelerators().Append(a);\n");
+                src.add("        }\n        return;\n    }\n\n");
+            }
+
             for (type in wui.nui.Vocabulary.types()) {
                 var winui = wui.nui.Vocabulary.winuiFor(type);
                 if (winui == null) continue;
@@ -260,6 +284,13 @@ class BridgeGenerator {
         src.add("            if (g_clickTokens[h].value != 0) { b.Click(g_clickTokens[h]); }\n");
         src.add("            g_clickTokens[h] = b.Click([callbackId](winrt::Windows::Foundation::IInspectable const&,\n");
         src.add("                                                   winrt_xaml::RoutedEventArgs const&) {\n");
+        src.add("                wui_bridge_invoke_node(callbackId);\n            });\n            return;\n        }\n");
+        src.add("        // A menu command clicks the same way a Button does: same token slot\n");
+        src.add("        // (one node is one control, never both), same id over the bridge.\n");
+        src.add("        if (auto mi = e.try_as<winrt_controls::MenuFlyoutItem>()) {\n");
+        src.add("            if (g_clickTokens[h].value != 0) { mi.Click(g_clickTokens[h]); }\n");
+        src.add("            g_clickTokens[h] = mi.Click([callbackId](winrt::Windows::Foundation::IInspectable const&,\n");
+        src.add("                                                    winrt_xaml::RoutedEventArgs const&) {\n");
         src.add("                wui_bridge_invoke_node(callbackId);\n            });\n        }\n        return;\n    }\n\n");
 
         // The value the handler reports is read off the **sender**, never off a
@@ -393,6 +424,23 @@ class BridgeGenerator {
         src.add("            if (i > n) i = n;\n");
         src.add("            bar.Items().InsertAt(i, item);\n        }\n        return;\n    }\n\n");
 
+        // Places five and six: a MenuBar holds MenuBarItems and a MenuBarItem
+        // holds flyout items -- typed vectors both, not a Panel's children.
+        // The MenuBarItem branch must sit BEFORE any generic fallback: it is a
+        // Control, and a fallback that boxed it as content would swallow it.
+        src.add("    if (auto menubar = p.try_as<winrt_controls::MenuBar>()) {\n");
+        src.add("        if (auto item = c.try_as<winrt_controls::MenuBarItem>()) {\n");
+        src.add("            uint32_t n = menubar.Items().Size();\n");
+        src.add("            uint32_t i = index < 0 ? n : (uint32_t)index;\n");
+        src.add("            if (i > n) i = n;\n");
+        src.add("            menubar.Items().InsertAt(i, item);\n        }\n        return;\n    }\n\n");
+        src.add("    if (auto menu = p.try_as<winrt_controls::MenuBarItem>()) {\n");
+        src.add("        if (auto item = c.try_as<winrt_controls::MenuFlyoutItemBase>()) {\n");
+        src.add("            uint32_t n = menu.Items().Size();\n");
+        src.add("            uint32_t i = index < 0 ? n : (uint32_t)index;\n");
+        src.add("            if (i > n) i = n;\n");
+        src.add("            menu.Items().InsertAt(i, item);\n        }\n        return;\n    }\n\n");
+
         src.add("    // Single-content containers: there is nothing for `index` to order,\n");
         src.add("    // and a second child replaces the first rather than joining it.\n");
         src.add("    if (auto border = p.try_as<winrt_controls::Border>()) { border.Child(c); return; }\n");
@@ -435,6 +483,17 @@ class BridgeGenerator {
         src.add("        if (auto item = c.try_as<winrt_controls::SelectorBarItem>()) {\n");
         src.add("            uint32_t index = 0;\n");
         src.add("            if (bar.Items().IndexOf(item, index)) bar.Items().RemoveAt(index);\n        }\n");
+        src.add("        return;\n    }\n\n");
+
+        src.add("    if (auto menubar = p.try_as<winrt_controls::MenuBar>()) {\n");
+        src.add("        if (auto item = c.try_as<winrt_controls::MenuBarItem>()) {\n");
+        src.add("            uint32_t index = 0;\n");
+        src.add("            if (menubar.Items().IndexOf(item, index)) menubar.Items().RemoveAt(index);\n        }\n");
+        src.add("        return;\n    }\n\n");
+        src.add("    if (auto menu = p.try_as<winrt_controls::MenuBarItem>()) {\n");
+        src.add("        if (auto item = c.try_as<winrt_controls::MenuFlyoutItemBase>()) {\n");
+        src.add("            uint32_t index = 0;\n");
+        src.add("            if (menu.Items().IndexOf(item, index)) menu.Items().RemoveAt(index);\n        }\n");
         src.add("        return;\n    }\n\n");
 
         src.add("    // Emptied rather than searched: a single-content container holds this\n");

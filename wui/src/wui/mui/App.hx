@@ -86,8 +86,60 @@ class App extends wui.App {
     **/
     public function nuiBody():nui.Node {
         var declared = view();
-        if (declared != null && !isEmptyRoot(declared)) return declared;
-        return wui.mui.FromViews.describe(body());
+        var root = (declared != null && !isEmptyRoot(declared))
+            ? declared
+            : wui.mui.FromViews.describe(body());
+        return withMenuBar(root);
+    }
+
+    /**
+        Inject the declared command sets as a MenuBar above the Primary tree.
+
+        No new bridge machinery on purpose: the menu is ORDINARY NODES in the
+        Primary tree, so reconciliation gives live labels for free — nuiBody()
+        runs inside the render effect, the command thunks are re-sampled on
+        every describe, and a label that reads state re-applies as a text prop
+        like any other. One MenuBarItem per CommandSet declaration, titled from
+        the set id — N menus, which SwiftUI's CommandsBuilder could not do.
+
+        The chord crosses as one packed int (wui.mui.Chords); a chord outside
+        the grammar keeps its item's label and click without an accelerator —
+        Chords already said why, once. The Command.action closures ride the
+        existing PCallback path: an id crosses, never a closure.
+    **/
+    function withMenuBar(root:nui.Node):nui.Node {
+        var bar:Null<nui.Node> = null;
+        for (d in surfaces()) switch (d) {
+            case CommandSet(id, commands):
+                if (bar == null) bar = new nui.Node("MenuBar");
+                var item = new nui.Node("MenuBarItem");
+                item.prop("title", nui.PropValue.PString(menuTitle(id)));
+                for (cmd in commands()) {
+                    var mi = new nui.Node("MenuFlyoutItem");
+                    mi.prop("text", nui.PropValue.PString(cmd.label));
+                    mi.prop("onClick", nui.PropValue.PCallback(cmd.action));
+                    if (cmd.shortcut != null) {
+                        var packed = wui.mui.Chords.parse(cmd.shortcut);
+                        if (packed != null) mi.prop("accelerator", nui.PropValue.PInt(packed));
+                    }
+                    item.child(mi);
+                }
+                bar.child(item);
+            case _:
+        }
+        if (bar == null) return root;
+
+        var wrapped = new nui.Node("VStack");
+        wrapped.child(bar);
+        wrapped.child(root);
+        return wrapped;
+    }
+
+    /** "shortcuts" -> "Shortcuts": the same one-capital rule the auxiliary
+        window titles follow. **/
+    static function menuTitle(id:String):String {
+        if (id == null || id.length == 0) return "Commands";
+        return id.charAt(0).toUpperCase() + id.substr(1);
     }
 
     /** The placeholder `view()` returns when an app never overrode it. **/
