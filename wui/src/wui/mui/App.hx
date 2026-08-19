@@ -9,8 +9,25 @@ package wui.mui;
 	`#if (mui_backend == "wui")` branch it used to live in.
 **/
 @:nui
+@:autoBuild(mui.macros.Surfaces.build())
 class App extends wui.App {
     var _appTitle:String = "App";
+
+    /**
+        Every surface this application declares: Primary — `body()`, always —
+        plus whatever `@:surface` methods collected into `declaredSurfaces()`.
+        Override to declare past the sugar: `super.surfaces().concat([…])`.
+        On wui the Primary content is `nuiBody()`'s concern; the declaration
+        still names `body()` — the tree `nuiBody()` falls back to describing.
+    **/
+    public function surfaces():Array<mui.surface.SurfaceDecl> {
+        return [mui.surface.SurfaceDecl.Tree(mui.surface.SurfaceRole.Primary, "body", () -> body())]
+            .concat(declaredSurfaces());
+    }
+
+    /** What `@:surface` declared. `mui.macros.Surfaces` overrides this on the
+        application; the default is the empty answer. **/
+    public function declaredSurfaces():Array<mui.surface.SurfaceDecl> return [];
 
     /**
         The view, as a `nui` node tree — what `ui()` markup produces.
