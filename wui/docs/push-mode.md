@@ -111,13 +111,57 @@ wiped; a destroyed node's ids become holes, and a late event against a hole is
 reported rather than routed to a stranger's closure.
 
 Tearing a surface down is `SurfaceRecord.dispose()` — idempotent, releases the
-render effect and the lifetime. For the Primary surface,
-`wui_bridge_dispose_primary()` is the seam a window `Closed` handler will call;
-it exists and is callable today, wired to nothing generated yet.
+render effect and the lifetime. `wui_bridge_dispose_primary()` is the
+application-over seam: it disposes every auxiliary first (each releases its
+own lifetime), then the Primary, whose lifetime carries everything the app
+`own()`ed.
 
 `test/MultiRootCheck.hx` pins all of this with two recording surfaces: an
 update or destroy on one must leave the other's bindings, controls and
 callbacks untouched.
+
+## Auxiliary windows
+
+A `@:surface(Auxiliary)` declaration on a mui app becomes a second WinUI
+window, live — its own surface record, reconciled on its own state, in
+declaration order (cardinality Many: N windows on the one UI thread is WinUI
+3's normal shape, and the only thread hxcpp is attached to).
+
+The layering is the hook pattern the sibling backends use: the bridge is wui
+core and may not import `mui`, so `wui.mui.App`'s constructor installs
+`HaxeBridge.auxiliaryRootsOf`, answering each declaration as a **node thunk**
+(`FromViews.describe` runs in the thunk — the push path eats nodes, and the
+conversion is the mui layer's business). `renderNui` mounts the auxiliaries
+right after the Primary; `install()` constructed the app — and installed the
+hook — before `BuildUI` ever ran, so the hook is always there.
+
+Window creation crosses through a **slot**, not a symbol —
+`wui_bridge_set_window_creator`, filled by `BuildUI`, consulted by the library
+— so the hxcpp library stays linkable on its own, and a test injects a
+counting creator on the Haxe side (`HaxeBridge.windowCreator`) without WinRT
+existing at all. The generated `wui::nodes::createWindow` opens the Window,
+registers a StackPanel root like any other surface's, and installs a `Closed`
+handler that reports the handle to `wui_bridge_surface_closed`; the Haxe side
+then disposes exactly that record. Closed windows are dead entries in a
+pinned, never-shrinking window list — the handle-table policy again.
+
+`test/AuxiliaryCheck.hx` drives the whole path as a real mui application with
+the seam injected: one window per declaration, per-surface rebuilds, a close
+that touches nothing else, and an application release that disposes the rest.
+
+### ABI deltas for the next Windows validation pass
+
+On top of the partition's list:
+
+1. new slot in the hxcpp library: `wui_bridge_set_window_creator(int (*)(const char*))`,
+   registered by the generated `BuildUI` before `wui_bridge_render_nui`;
+2. new library export consumed by generated code: `wui_bridge_surface_closed(int)`,
+   called by the `Closed` handler inside the generated `wui::nodes::createWindow`;
+3. new generated function `wui::nodes::createWindow(const char*) -> int`
+   (declared in `WuiNodes.h`, defined in `WuiNodes.cpp`, plus the pinned
+   `g_windows` vector);
+4. `wui_bridge_dispose_primary()` now tears down auxiliaries before the
+   Primary — name unchanged, behaviour widened.
 
 ## What is still missing
 

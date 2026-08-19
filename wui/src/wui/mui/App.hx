@@ -13,6 +13,17 @@ package wui.mui;
 class App extends wui.App {
     var _appTitle:String = "App";
 
+    public function new() {
+        super();
+        // The bridge is wui core and may not import mui, so the mui layer
+        // installs the hook that turns Auxiliary declarations into extra
+        // windows. Every mui app sets the same static — idempotent by
+        // construction. Installed in the constructor, which install() runs
+        // before BuildUI ever calls renderNui, so the hook is always there
+        // when the auxiliaries mount.
+        wui.bridge.HaxeBridge.auxiliaryRootsOf = muiAuxiliaryRoots;
+    }
+
     /**
         Every surface this application declares: Primary — `body()`, always —
         plus whatever `@:surface` methods collected into `declaredSurfaces()`.
@@ -28,6 +39,25 @@ class App extends wui.App {
     /** What `@:surface` declared. `mui.macros.Surfaces` overrides this on the
         application; the default is the empty answer. **/
     public function declaredSurfaces():Array<mui.surface.SurfaceDecl> return [];
+
+    /**
+        The declared Auxiliary windows, as node thunks. Cardinality Many —
+        WinUI puts N windows on the one UI thread, so every declaration gets
+        one, in declaration order. The thunk describes the declaration's view
+        tree as nodes on every run, exactly the way `nuiBody()` serves the
+        Primary: the conversion is this layer's business, so the bridge stays
+        free of both `mui` and the converter.
+    **/
+    static function muiAuxiliaryRoots(app:Dynamic):Array<{id:String, node:() -> nui.Node}> {
+        var mine:App = cast app;
+        var out = [];
+        for (d in mine.surfaces()) switch (d) {
+            case Tree(mui.surface.SurfaceRole.Auxiliary, id, content):
+                out.push({id: id, node: function() return wui.mui.FromViews.describe(content())});
+            case _:
+        }
+        return out;
+    }
 
     /**
         The view, as a `nui` node tree — what `ui()` markup produces.

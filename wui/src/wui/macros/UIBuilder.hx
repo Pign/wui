@@ -259,12 +259,20 @@ namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 // a literal 0 on both sides once, which held only while there was one window.
 extern "C" void wui_bridge_render_nui(int rootHandle);
 extern "C" void wui_bridge_pump();
+// The window-creator slot: filled here, consulted by the library when the app
+// declares Auxiliary windows. A slot rather than a symbol, so the hxcpp
+// library stays linkable without this file -- the push-handler reasoning.
+extern "C" void wui_bridge_set_window_creator(int (*fn)(const char*));
 
 namespace MainWindow {
 
 winrt_xaml::UIElement BuildUI(winrt_xaml::Window const& window)
 {
     wui::runtime::dispatcherQueue = window.DispatcherQueue();
+
+    // Before render_nui, which mounts the auxiliaries right after the
+    // Primary: a declared window with no creator yet would be dropped.
+    wui_bridge_set_window_creator(&wui::nodes::createWindow);
 
     // This surface\'s root, registered rather than hardwired: everything Haxe
     // creates for this surface is inserted under the handle it gets back.

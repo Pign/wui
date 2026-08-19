@@ -183,13 +183,41 @@ extern "C" void wui_bridge_render_nui(int rootHandle) {
     ::wui::bridge::HaxeBridge_obj::renderNui(rootHandle);
 }
 
-// Tear the Primary surface down: dispose its render effect and release the
-// application lifetime. The seam a window Closed handler calls once the
-// Auxiliary-window work lands on Windows; callable today, called by nothing
-// generated yet.
+// Tear every surface down: the auxiliaries first (each releases its own
+// lifetime), then the Primary, whose lifetime is the application\'s. The name
+// kept its Primary-era spelling because the ABI list for the Windows pass
+// already carries it; what it means is "the application is over".
 extern "C" void wui_bridge_dispose_primary() {
     if (!s_wui_haxe_started) return;
     ::wui::bridge::HaxeBridge_obj::disposePrimary();
+}
+
+// ---- auxiliary windows ----
+//
+// A slot again, not a symbol: creating a winrt Window is the generated
+// project\'s business, and naming its function here would make this library
+// unlinkable on its own -- the same reasoning as the push handlers above.
+// BuildUI registers the creator; a test injects a counting one on the Haxe
+// side and this slot is never consulted.
+typedef int (*wui_window_creator)(const char*);
+static wui_window_creator s_wui_window_creator = nullptr;
+
+extern "C" void wui_bridge_set_window_creator(wui_window_creator fn) {
+    s_wui_window_creator = fn;
+}
+
+// Called from Haxe to open one auxiliary window. Returns the registered root
+// handle, or -1 when no creator is installed (a build with no windows).
+extern "C" int wui_bridge_create_window(const char* title) {
+    return s_wui_window_creator ? s_wui_window_creator(title) : -1;
+}
+
+// An auxiliary window was closed by the user. The Haxe side disposes exactly
+// that surface\'s record -- its effect and its own lifetime -- and nothing
+// else; the controls die with their window and their handles become holes.
+extern "C" void wui_bridge_surface_closed(int rootHandle) {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::HaxeBridge_obj::surfaceClosed(rootHandle);
 }
 
 // A node property handler, from the nui push contract. A third entry point for
@@ -564,16 +592,128 @@ class HaxeBridge {
 		});
 
 		trace('[wui] nui: tree mounted on root ${record.root}, ${Callbacks.nodeCount()} handler(s)');
+
+		// The Primary exists; now the windows the app declared. After, not
+		// before: an auxiliary reading the same state as the body should find
+		// the world the body already built.
+		mountAuxiliaries();
 	}
 
 	/**
-		Tear the Primary surface down: the render effect, then everything the
-		application `own()`ed on its lifetime -- the first caller that hook has
-		had on this backend. Idempotent, because a window Closed handler and a
-		process exit overlap. The native controls die with their window; their
-		handles become permanent holes.
+		The mui layer's hook for the app's Auxiliary declarations.
+
+		This class is wui core and may not import `mui` — the surface
+		vocabulary lives there. `wui.mui.App`'s constructor installs a provider
+		that answers each `Tree(Auxiliary, …)` declaration as a node thunk (the
+		conversion from views to nodes is the mui layer's business too, which
+		is why the shape here is `nui.Node` and not a view: the push path eats
+		nodes, and core stays free of both `mui` and its converter). A plain
+		`wui.App` installs nothing and keeps exactly one window.
+	**/
+	public static var auxiliaryRootsOf:Dynamic -> Array<{id:String, node:() -> nui.Node}> = null;
+
+	/**
+		The injectable seam over window creation: the one native act in the
+		auxiliary path a test cannot perform. Left null, creation crosses to
+		the generated project through the `wui_bridge_create_window` slot; a
+		test installs a counting function and the native side is never asked.
+	**/
+	public static var windowCreator:String -> Int = null;
+
+	static function createWindow(title:String):Int {
+		if (windowCreator != null) return windowCreator(title);
+		#if cpp
+		var handle:Int = -1;
+		untyped __cpp__("{0} = wui_bridge_create_window({1}.utf8_str())", handle, title);
+		return handle;
+		#else
+		return -1;
+		#end
+	}
+
+	/** Auxiliary records by their root handle — the key the Closed handler
+		reports back. Cardinality Many: every declaration gets a window. **/
+	static var auxiliaries:Map<Int, wui.nui.SurfaceRecord> = new Map();
+
+	static function mountAuxiliaries():Void {
+		if (auxiliaryRootsOf == null) return;
+
+		for (decl in auxiliaryRootsOf(appInstance)) {
+			var handle = createWindow(windowTitle(decl.id));
+			if (handle < 0) {
+				trace('[wui] auxiliary "${decl.id}": no window creator registered, not mounted');
+				continue;
+			}
+
+			// The per-surface record again -- with its OWN lifetime this time.
+			// The Primary carries the application's, because its passes bracket
+			// body(); an auxiliary's passes bracket its own content, and a
+			// shared lifetime would sweep the app's keep keys on this surface's
+			// schedule.
+			var sink = new wui.nui.WinUISink();
+			var record = new wui.nui.SurfaceRecord(handle, sink,
+				new wui.nui.Reconciler(sink), new rui.Lifetime());
+			auxiliaries.set(handle, record);
+
+			var node = decl.node;
+			record.effect = new rui.Signal.Effect(function() {
+				record.lifetime.beginPass();
+				var tree = node();
+				if (tree == null) {
+					trace('[wui] auxiliary "${decl.id}": the declaration returned null');
+					return;
+				}
+				record.tree = record.reconciler.reconcile(record.tree, tree, record.root);
+				record.lifetime.endPass();
+			});
+
+			trace('[wui] auxiliary "${decl.id}" mounted on root $handle');
+		}
+	}
+
+	/**
+		An auxiliary window was closed. Dispose exactly that record — its
+		effect and its own lifetime — and nothing else: the not-wiping is the
+		whole point of the partition. Unknown handles are ignored, which also
+		makes a second Closed report a no-op (dispose overlaps with release by
+		contract, and both may arrive).
+	**/
+	public static function surfaceClosed(rootHandle:Int):Void {
+		var record = auxiliaries.get(rootHandle);
+		if (record == null) return;
+		auxiliaries.remove(rootHandle);
+		record.dispose();
+	}
+
+	/** One auxiliary's record, by root handle. For tools and tests; an
+		application has no business holding these. **/
+	public static function auxiliaryRecord(rootHandle:Int):Null<wui.nui.SurfaceRecord> {
+		return auxiliaries.get(rootHandle);
+	}
+
+	/** "inspector" -> "Inspector": the declaration id is code-shaped, the
+		title bar is not. One capital, nothing cleverer -- an app that cares
+		about its auxiliary titles will grow a property for it. **/
+	static function windowTitle(id:String):String {
+		if (id == null || id.length == 0) return "Window";
+		return id.charAt(0).toUpperCase() + id.substr(1);
+	}
+
+	/**
+		Tear every surface down: the auxiliaries first — each releases its own
+		lifetime — then the Primary, whose lifetime is the application's, so
+		everything the app `own()`ed goes last. Idempotent, because a window
+		Closed handler and a process exit overlap. The native controls die with
+		their windows; their handles become permanent holes. (The name kept its
+		Primary-era spelling: the ABI list for the Windows pass already carries
+		`wui_bridge_dispose_primary`, and what it means is "the application is
+		over".)
 	**/
 	public static function disposePrimary():Void {
+		// Snapshot the keys: surfaceClosed removes as it goes, and mutating a
+		// map mid-iteration is exactly the kind of works-on-one-target bug
+		// this backend has paid for before.
+		for (handle in [for (h in auxiliaries.keys()) h]) surfaceClosed(handle);
 		if (primary == null) return;
 		primary.dispose();
 		primary = null;

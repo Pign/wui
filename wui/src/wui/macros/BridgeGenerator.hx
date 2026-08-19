@@ -72,7 +72,11 @@ class BridgeGenerator {
         header.add("    // lands on handle 0 as before -- but as a fact of an empty table, not a\n");
         header.add("    // contract. This replaced reset(), which CLEARED the table first: fine\n");
         header.add("    // with one window, and with two it wiped the other surface's controls.\n");
-        header.add("    int registerRoot(winrt::Microsoft::UI::Xaml::UIElement const& root);\n}}\n");
+        header.add("    int registerRoot(winrt::Microsoft::UI::Xaml::UIElement const& root);\n\n");
+        header.add("    // Open one auxiliary window and register its root. BuildUI hands this\n");
+        header.add("    // to the hxcpp library through the wui_bridge_set_window_creator slot;\n");
+        header.add("    // the library never names it, so it stays linkable on its own.\n");
+        header.add("    int createWindow(const char* title);\n}}\n");
         ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiNodes.h"]), header.toString());
 
         var src = new StringBuf();
@@ -89,7 +93,10 @@ class BridgeGenerator {
         src.add("extern \"C\" void wui_bridge_invoke_node_string(int id, const char* value);\n");
         src.add("extern \"C\" void wui_bridge_invoke_node_float(int id, double value);\n");
         src.add("extern \"C\" void wui_bridge_invoke_node_int(int id, int value);\n");
-        src.add("extern \"C\" void wui_bridge_invoke_node_bool(int id, bool value);\n\n");
+        src.add("extern \"C\" void wui_bridge_invoke_node_bool(int id, bool value);\n");
+        src.add("// An auxiliary window was closed; the Haxe side disposes exactly that\n");
+        src.add("// surface's record. Reported by the Closed handler createWindow installs.\n");
+        src.add("extern \"C\" void wui_bridge_surface_closed(int rootHandle);\n\n");
 
         src.add("namespace {\n");
         src.add("    // Index -> control. Handles are never reused: a stale one then names a hole\n");
@@ -122,6 +129,12 @@ class BridgeGenerator {
         src.add("        if (pv == nullptr || pv.Type() != winrt::Windows::Foundation::PropertyType::String) return L\"\";\n");
         src.add("        return std::wstring(pv.GetString().c_str());\n    }\n\n");
 
+        src.add("    // The auxiliary windows, pinned. A winrt::Window is ref-counted, and\n");
+        src.add("    // nothing else in this process is obliged to hold one once createWindow\n");
+        src.add("    // returns -- the main window survives as an App member for the same\n");
+        src.add("    // reason. Appended, never removed: the same never-shrink policy as the\n");
+        src.add("    // handle table, and a closed window is a dead entry nobody dereferences.\n");
+        src.add("    std::vector<winrt_xaml::Window> g_windows;\n\n");
         src.add("    winrt_xaml::UIElement at(int h) {\n");
         src.add("        if (h < 0 || h >= (int)g_nodes.size()) return nullptr;\n");
         src.add("        return g_nodes[h];\n    }\n\n");
@@ -135,7 +148,26 @@ class BridgeGenerator {
         src.add("    // Clearing here is what this function exists to NOT do -- the old reset()\n");
         src.add("    // wiped every surface's controls to seat one window's root.\n");
         src.add("    int registerRoot(winrt_xaml::UIElement const& root) {\n");
-        src.add("        return put(root);\n    }\n}}\n\n");
+        src.add("        return put(root);\n    }\n\n");
+        src.add("    // One auxiliary window: a Window, a StackPanel root registered like any\n");
+        src.add("    // other surface's, a Closed handler that names the handle back to Haxe.\n");
+        src.add("    // Same UI thread as everything else -- WinUI 3's normal multi-window\n");
+        src.add("    // shape, and the only thread hxcpp is attached to.\n");
+        src.add("    int createWindow(const char* title) {\n");
+        src.add("        winrt_xaml::Window window;\n");
+        src.add("        window.Title(winrt::hstring(wui::runtime::fromUtf8(title)));\n");
+        src.add("        winrt_controls::StackPanel root;\n");
+        src.add("        root.Orientation(winrt_controls::Orientation::Vertical);\n");
+        src.add("        int handle = registerRoot(root);\n");
+        src.add("        window.Content(root);\n");
+        src.add("        // The handle crosses by value: the closure must not hold the window\n");
+        src.add("        // (a window owning a handler owning the window is a cycle WinRT has\n");
+        src.add("        // no collector to break -- the same rule as the sender lambdas below).\n");
+        src.add("        window.Closed([handle](auto const&, auto const&) {\n");
+        src.add("            wui_bridge_surface_closed(handle);\n        });\n");
+        src.add("        g_windows.push_back(window);\n");
+        src.add("        window.Activate();\n");
+        src.add("        return handle;\n    }\n}}\n\n");
 
         // ---- create, from the declarations ----
         src.add("extern \"C\" int wui_node_create(const char* type, int parent) {\n");
