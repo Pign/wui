@@ -254,8 +254,10 @@ namespace MainWindow {
 namespace winrt_controls = winrt::Microsoft::UI::Xaml::Controls;
 namespace winrt_xaml = winrt::Microsoft::UI::Xaml;
 
-// Implemented in the hxcpp library: mounts the Haxe node tree into handle 0.
-extern "C" void wui_bridge_render_nui();
+// Implemented in the hxcpp library: mounts the Haxe node tree into the root
+// handle this function registers. The handle crosses as a parameter -- it was
+// a literal 0 on both sides once, which held only while there was one window.
+extern "C" void wui_bridge_render_nui(int rootHandle);
 extern "C" void wui_bridge_pump();
 
 namespace MainWindow {
@@ -264,12 +266,13 @@ winrt_xaml::UIElement BuildUI(winrt_xaml::Window const& window)
 {
     wui::runtime::dispatcherQueue = window.DispatcherQueue();
 
-    // Handle 0 is this panel. Everything Haxe creates is inserted into it.
+    // This surface\'s root, registered rather than hardwired: everything Haxe
+    // creates for this surface is inserted under the handle it gets back.
     winrt_controls::StackPanel root;
     root.Orientation(winrt_controls::Orientation::Vertical);
-    wui::nodes::reset(root);
+    int rootHandle = wui::nodes::registerRoot(root);
 
-    wui_bridge_render_nui();
+    wui_bridge_render_nui(rootHandle);
 
     // The 100ms beat that lets haxe.Timer fire: WinUI owns the message loop,
     // so this is the one periodic visit Haxe gets.

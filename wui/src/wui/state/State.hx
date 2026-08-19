@@ -28,7 +28,15 @@ package wui.state;
 class State<T> extends rui.state.State<T> {
     var _listeners:Array<T -> Void>;
 
-    /** Global registry of all state instances by name. */
+    /**
+        Global registry of all state instances by name.
+
+        The one cross-surface global the P3 partition leaves standing, on
+        purpose: two surfaces declaring a state of the same name collide here.
+        Not redesigned yet because `sui` has the same flat name-keyed space as
+        its invalidation key, and whatever carries a surface id into that key
+        must be decided once and done the same way on both backends.
+    **/
     public static var _registry:Map<String, Dynamic> = new Map();
 
     public function new(initial:T, stateName:String) {

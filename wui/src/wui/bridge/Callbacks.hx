@@ -107,6 +107,14 @@ class Callbacks {
 	// numbered at compile time either, so they belong to neither table above.
 	// Three ranges rather than one shared counter: the cost is a few lines, and
 	// the alternative is an id from one world reaching a closure from another.
+	//
+	// Ids are MONOTONIC and the table is never wiped. It used to be reset on
+	// every mount, which was fine while exactly one tree ever mounted -- and a
+	// day-one bug the moment a second surface exists, because mounting it would
+	// wipe the first surface's handlers while its controls still point at the
+	// ids. Same policy as the native handle table: a destroyed node's ids
+	// become holes (see `clearNode`), permanently, and a click landing in a
+	// hole is reported rather than running someone else's closure.
 
 	// Typed as `Dynamic` because a handler is not always nullary. A control that
 	// carries a value hands it back -- the text in the field at the moment of the
@@ -127,9 +135,18 @@ class Callbacks {
 		return nodeHandlers.length;
 	}
 
-	/** Drop them all. Called when a tree is mounted from scratch. **/
-	public static function resetNodes():Void {
-		nodeHandlers = [];
+	/**
+		Turn one id into a hole, when its node is destroyed.
+
+		The slot is nulled, never recycled: the control that pointed at this id
+		is gone, and the next node gets the next id. A late event against a
+		hole -- the small-but-real window every destroy has -- is reported by
+		`nodeHandler` instead of poking whatever closure a recycled slot would
+		hold.
+	**/
+	public static function clearNode(id:Int):Void {
+		if (id < 0 || id >= nodeHandlers.length) return;
+		nodeHandlers[id] = null;
 	}
 
 	/**
@@ -187,6 +204,13 @@ class Callbacks {
 	static function nodeHandler(id:Int):Null<Dynamic> {
 		if (id < 0 || id >= nodeHandlers.length) {
 			trace('[wui] no node callback for id $id (${nodeHandlers.length} registered)');
+			return null;
+		}
+		if (nodeHandlers[id] == null) {
+			// A hole: the node was destroyed and its id retired. A late event
+			// in destroy's window lands here; saying so is what makes the
+			// window observable at all.
+			trace('[wui] node callback $id was cleared with its node; late event dropped');
 			return null;
 		}
 		return nodeHandlers[id];

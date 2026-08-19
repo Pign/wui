@@ -68,9 +68,11 @@ class BridgeGenerator {
         header.add("extern \"C\" void wui_node_remove(int parent, int child);\n");
         header.add("extern \"C\" void wui_node_destroy(int h);\n\n");
         header.add("namespace wui { namespace nodes {\n");
-        header.add("    // Handle 0 is the root the window mounts; Haxe inserts into it.\n");
-        header.add("    void reset(winrt::Microsoft::UI::Xaml::UIElement const& root);\n");
-        header.add("    winrt::Microsoft::UI::Xaml::UIElement rootElement();\n}}\n");
+        header.add("    // Register a surface's root and get its handle. The first window's root\n");
+        header.add("    // lands on handle 0 as before -- but as a fact of an empty table, not a\n");
+        header.add("    // contract. This replaced reset(), which CLEARED the table first: fine\n");
+        header.add("    // with one window, and with two it wiped the other surface's controls.\n");
+        header.add("    int registerRoot(winrt::Microsoft::UI::Xaml::UIElement const& root);\n}}\n");
         ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiNodes.h"]), header.toString());
 
         var src = new StringBuf();
@@ -129,12 +131,11 @@ class BridgeGenerator {
         src.add("        return (int)g_nodes.size() - 1;\n    }\n}\n\n");
 
         src.add("namespace wui { namespace nodes {\n");
-        src.add("    void reset(winrt_xaml::UIElement const& root) {\n");
-        src.add("        g_nodes.clear();\n        g_clickTokens.clear();\n        g_valueTokens.clear();\n");
-        src.add("        g_nodes.push_back(root);\n        g_clickTokens.push_back(winrt::event_token{});\n");
-        src.add("        g_valueTokens.push_back(winrt::event_token{});\n    }\n\n");
-        src.add("    winrt_xaml::UIElement rootElement() {\n");
-        src.add("        return g_nodes.empty() ? nullptr : g_nodes[0];\n    }\n}}\n\n");
+        src.add("    // A root is an ordinary handle: appended, never index 0 by contract.\n");
+        src.add("    // Clearing here is what this function exists to NOT do -- the old reset()\n");
+        src.add("    // wiped every surface's controls to seat one window's root.\n");
+        src.add("    int registerRoot(winrt_xaml::UIElement const& root) {\n");
+        src.add("        return put(root);\n    }\n}}\n\n");
 
         // ---- create, from the declarations ----
         src.add("extern \"C\" int wui_node_create(const char* type, int parent) {\n");
@@ -413,10 +414,16 @@ class BridgeGenerator {
         src.add("        if (holder.Content() == c) holder.Content(nullptr);\n        return;\n    }\n}\n\n");
 
         src.add("extern \"C\" void wui_node_destroy(int h) {\n");
-        src.add("    if (h <= 0 || h >= (int)g_nodes.size()) return;\n");
+        src.add("    // h < 0, not h <= 0: handle 0 stopped being \"the root\" when roots became\n");
+        src.add("    // registered handles. Roots are still never destroyed -- but by who calls\n");
+        src.add("    // (the reconciler only destroys handles it created), not by a magic index.\n");
+        src.add("    if (h < 0 || h >= (int)g_nodes.size()) return;\n");
         src.add("    // A real release, not a hide. Dropping the last reference frees a WinRT\n");
         src.add("    // control -- unlike Silica, where destroy can only set visible = false.\n");
+        src.add("    // Both token slots, not just clicks: a value subscription kept alive on a\n");
+        src.add("    // freed slot was a leak the single-token line quietly had.\n");
         src.add("    g_clickTokens[h] = winrt::event_token{};\n");
+        src.add("    g_valueTokens[h] = winrt::event_token{};\n");
         src.add("    g_nodes[h] = nullptr;\n}\n");
 
         ProjectGenerator.writeIfChanged(Path.join([outputDir, "WuiNodes.cpp"]), src.toString());

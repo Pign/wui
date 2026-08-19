@@ -166,7 +166,6 @@ extern "C" void wui_bridge_refresh_lists() {
     ::wui::bridge::HaxeBridge_obj::refreshLists();
 }
 
-// Mount the Haxe node tree into handle 0, which BuildUI has just registered.
 // Advance the Haxe-side scheduled work. Driven by a 100ms DispatcherQueueTimer
 // in MainWindow.cpp -- the one periodic visit Haxe gets, since WinUI owns the
 // message loop and the Haxe entry point that would pump after main() never
@@ -176,9 +175,21 @@ extern "C" void wui_bridge_pump() {
     ::wui::bridge::HaxeBridge_obj::pumpHaxeEvents();
 }
 
-extern "C" void wui_bridge_render_nui() {
+// Mount the Haxe node tree into the root BuildUI just registered. The handle
+// arrives as a parameter: it used to be a literal 0 hardwired on both sides,
+// which held exactly as long as there was one window to be the zeroth.
+extern "C" void wui_bridge_render_nui(int rootHandle) {
     if (!s_wui_haxe_started) return;
-    ::wui::bridge::HaxeBridge_obj::renderNui();
+    ::wui::bridge::HaxeBridge_obj::renderNui(rootHandle);
+}
+
+// Tear the Primary surface down: dispose its render effect and release the
+// application lifetime. The seam a window Closed handler calls once the
+// Auxiliary-window work lands on Windows; callable today, called by nothing
+// generated yet.
+extern "C" void wui_bridge_dispose_primary() {
+    if (!s_wui_haxe_started) return;
+    ::wui::bridge::HaxeBridge_obj::disposePrimary();
 }
 
 // A node property handler, from the nui push contract. A third entry point for
@@ -495,8 +506,14 @@ class HaxeBridge {
 		}
 	}
 
-	public static function renderNui():Void {
-		Callbacks.resetNodes();
+	public static function renderNui(rootHandle:Int):Void {
+		// Once. OnLaunched can be raised again (relaunch, activation), and the
+		// boot is guarded but this was not: a second pass would have registered
+		// a second root and mounted a second Primary over the first.
+		if (primary != null) {
+			trace("[wui] renderNui: the Primary surface is already mounted");
+			return;
+		}
 
 		if (appInstance == null) {
 			trace("[wui] renderNui: no app instance; install() has not run");
@@ -516,8 +533,15 @@ class HaxeBridge {
 			return;
 		}
 
-		nuiSink = new wui.nui.WinUISink();
-		nuiReconciler = new wui.nui.Reconciler(nuiSink);
+		// The per-surface record: its own sink and reconciler (instances
+		// already), the root handle BuildUI registered, and -- for Primary --
+		// the APPLICATION lifetime, because its passes bracket body(), which
+		// is where the app's `keep` keys are declared. A later surface brings
+		// a fresh Lifetime instead, so its sweep cannot touch these keys.
+		var sink = new wui.nui.WinUISink();
+		var record = new wui.nui.SurfaceRecord(rootHandle, sink,
+			new wui.nui.Reconciler(sink), appInstance.lifetime);
+		primary = record;
 
 		// Render inside an effect, so the app never asks for a re-render.
 		//
@@ -525,21 +549,34 @@ class HaxeBridge {
 		// state reconciles on its own. Without this an app had to call
 		// `rerenderNui()` by hand -- framework plumbing in application code, and
 		// on a backend it is not supposed to name.
-		nuiEffect = new rui.Signal.Effect(function() {
-			appInstance.lifetime.beginPass();
+		record.effect = new rui.Signal.Effect(function() {
+			record.lifetime.beginPass();
 			var tree = appInstance.nuiBody();
 			if (tree == null) {
 				trace("[wui] nuiBody() returned null");
 				return;
 			}
-			nuiTree = nuiReconciler.reconcile(nuiTree, tree, 0);
+			record.tree = record.reconciler.reconcile(record.tree, tree, record.root);
 			// After reconcile, not after nuiBody(): a node with deferred
 			// children has its thunk run in there, so that is where a component
 			// has finished declaring.
-			appInstance.lifetime.endPass();
+			record.lifetime.endPass();
 		});
 
-		trace('[wui] nui: tree mounted, ${Callbacks.nodeCount()} handler(s)');
+		trace('[wui] nui: tree mounted on root ${record.root}, ${Callbacks.nodeCount()} handler(s)');
+	}
+
+	/**
+		Tear the Primary surface down: the render effect, then everything the
+		application `own()`ed on its lifetime -- the first caller that hook has
+		had on this backend. Idempotent, because a window Closed handler and a
+		process exit overlap. The native controls die with their window; their
+		handles become permanent holes.
+	**/
+	public static function disposePrimary():Void {
+		if (primary == null) return;
+		primary.dispose();
+		primary = null;
 	}
 
 	/**
@@ -555,7 +592,7 @@ class HaxeBridge {
 		is reordered.
 	**/
 	public static function rerenderNui():Void {
-		if (nuiReconciler == null || appInstance == null) {
+		if (primary == null || appInstance == null) {
 			trace("[wui] rerenderNui: nothing mounted yet");
 			return;
 		}
@@ -566,13 +603,12 @@ class HaxeBridge {
 			return;
 		}
 
-		nuiTree = nuiReconciler.reconcile(nuiTree, node, 0);
+		primary.tree = primary.reconciler.reconcile(primary.tree, node, primary.root);
 	}
 
-	static var nuiSink:wui.nui.WinUISink = null;
-	static var nuiReconciler:wui.nui.Reconciler<Int> = null;
-	static var nuiTree:wui.nui.Mounted<Int> = null;
-	static var nuiEffect:rui.Signal.Effect = null;
+	/** The Primary surface's record -- what used to be four statics. A later
+		surface (an Auxiliary window) gets its own record, not a fifth static. **/
+	static var primary:Null<wui.nui.SurfaceRecord> = null;
 
 	/** Arrays and the persistent structures a list state is meant to hold. **/
 	static function isCollection(v:Dynamic):Bool {

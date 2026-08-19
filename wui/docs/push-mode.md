@@ -93,6 +93,32 @@ become is written on the member, so the two numeric entry points accept each
 other's properties and convert. Strings and booleans stay matched exactly:
 neither has a form the other can be mistaken for.
 
+## One tree per surface
+
+A mounted tree is a **surface record** — its own sink, reconciler, render
+effect and `rui.Lifetime`, plus the root handle it reconciles into
+(`wui.nui.SurfaceRecord`). The Primary surface holds the *application's*
+lifetime, because its render passes bracket `body()`, where the app's `keep`
+keys are declared; a later surface (an auxiliary window) brings a fresh one.
+
+Roots are **registered, not hardwired**: `BuildUI` calls
+`wui::nodes::registerRoot(root)` and passes the handle it gets back to
+`wui_bridge_render_nui(int)`. It used to be a literal `0` on both sides, seated
+by a `reset()` that cleared the whole handle table first — fine with one
+window, and a wipe of every other surface's controls the moment there are two.
+The same rule now governs node callbacks: the registry is monotonic and never
+wiped; a destroyed node's ids become holes, and a late event against a hole is
+reported rather than routed to a stranger's closure.
+
+Tearing a surface down is `SurfaceRecord.dispose()` — idempotent, releases the
+render effect and the lifetime. For the Primary surface,
+`wui_bridge_dispose_primary()` is the seam a window `Closed` handler will call;
+it exists and is callable today, wired to nothing generated yet.
+
+`test/MultiRootCheck.hx` pins all of this with two recording surfaces: an
+update or destroy on one must leave the other's bindings, controls and
+callbacks untouched.
+
 ## What is still missing
 
 The transpiled path's own state bridge does not push `TFloat` or `TBool` to the

@@ -8,7 +8,7 @@ import wui.nui.Reconciler;
 /**
 	That unmounting a subtree stops the bindings made against it. Run with:
 
-	    haxe -cp src -cp test -lib rui -lib nui -main UnmountCheck --interp
+	    haxe -cp src -cp test -lib rui -lib nui -lib mui -main UnmountCheck --interp
 
 	The reconciler is plain Haxe — only `WinUISink` reaches native code — so this
 	drives it with a sink that records instead of drawing, and no Windows is

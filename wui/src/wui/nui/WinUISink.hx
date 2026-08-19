@@ -235,6 +235,17 @@ class WinUISink implements NodeSink<Int> {
 			for (stop in made)
 				try stop() catch (e:Dynamic) trace("[wui] binding teardown: " + e);
 		}
+		// Retire the node's callback ids too. The registry is monotonic and
+		// never wiped (a wipe would take another surface's handlers with it),
+		// so retirement happens here, where the node's death is known: each id
+		// becomes a hole, and a late event against it is reported, never
+		// routed to a stranger's closure.
+		var prefix = target + ":";
+		var dead = [for (slot in callbackIds.keys()) if (StringTools.startsWith(slot, prefix)) slot];
+		for (slot in dead) {
+			Callbacks.clearNode(callbackIds.get(slot));
+			callbackIds.remove(slot);
+		}
 		nativeDestroy(target);
 	}
 
