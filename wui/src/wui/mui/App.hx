@@ -22,6 +22,10 @@ class App extends wui.App {
         // before BuildUI ever calls renderNui, so the hook is always there
         // when the auxiliaries mount.
         wui.bridge.HaxeBridge.auxiliaryRootsOf = muiAuxiliaryRoots;
+        // The View->Node describer, for the detached corner (Companion
+        // projection, widget snapshots): FromViews already speaks the canon,
+        // it just signs the shared register.
+        mui.surface.Describe.impl = v -> wui.mui.FromViews.describe(v);
     }
 
     /**
