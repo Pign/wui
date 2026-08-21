@@ -99,8 +99,12 @@ class WinUIGenerator {
             return;
         }
 
-        // Use the first App subclass found
-        var appType = collectedTypes[0];
+        // Use the leaf App subclass: a facade such as `wui.mui.App` is itself
+        // a collected descendant of `wui.App`, and compiler order can put it
+        // first — the runtime would then instantiate the facade instead of
+        // the user's app. The app being built is the collected class that no
+        // other collected class extends (same rule as aui's resolveApp).
+        var appType = resolveLeafApp(collectedTypes);
         var appName = getAppName(appType);
         var windowWidth = getWindowWidth(appType);
         var windowHeight = getWindowHeight(appType);
@@ -243,6 +247,37 @@ class WinUIGenerator {
             default:
         }
         return result;
+    }
+
+    /**
+        The collected class that no other collected class extends. With one
+        user app per compilation there is exactly one such leaf; should
+        several independent apps ever be compiled together, the first leaf
+        in compiler order wins, matching the old behavior.
+    **/
+    static function resolveLeafApp(candidates:Array<Type>):Type {
+        for (candidate in candidates) {
+            var cls = switch (candidate) {
+                case TInst(ref, _): ref.get();
+                case _: continue;
+            };
+            var extended = false;
+            for (other in candidates) {
+                if (other == candidate) continue;
+                var walk = switch (other) {
+                    case TInst(oref, _): oref.get().superClass;
+                    case _: null;
+                };
+                while (walk != null && !extended) {
+                    var sup = walk.t.get();
+                    extended = sup.pack.join(".") == cls.pack.join(".") && sup.name == cls.name;
+                    walk = sup.superClass;
+                }
+                if (extended) break;
+            }
+            if (!extended) return candidate;
+        }
+        return candidates[0];
     }
 
     static function isAppSubclass(cls:ClassType):Bool {
