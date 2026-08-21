@@ -23,9 +23,10 @@ class App extends wui.App {
         // when the auxiliaries mount.
         wui.bridge.HaxeBridge.auxiliaryRootsOf = muiAuxiliaryRoots;
         // The View->Node describer, for the detached corner (Companion
-        // projection, widget snapshots): FromViews already speaks the canon,
-        // it just signs the shared register.
-        mui.surface.Describe.impl = v -> wui.mui.FromViews.describe(v);
+        // projection, widget snapshots). Not plain describe(): that one keeps
+        // wui's own vocabulary for the local runtime, and the register speaks
+        // the canonical names (Button/label, Toggle, TextInput).
+        mui.surface.Describe.impl = v -> wui.mui.FromViews.describeCanonical(v);
     }
 
     /**

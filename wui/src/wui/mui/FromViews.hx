@@ -248,4 +248,38 @@ class FromViews {
 		if (Std.isOfType(value, Float)) return PFloat(value);
 		return PString(Std.string(value));
 	}
+
+	/**
+		Describe for the register: wui names out, canonical names on the wire.
+
+		The nodes above keep wui's own vocabulary — `Button`/`text`,
+		`ToggleSwitch`, `TextBox` — because the local push runtime is generated
+		from those declarations. The describe register speaks the canonical
+		mui names instead (`Button`/`label`, `Toggle`, `TextInput`; see
+		`cui.nui.Describe`, the reference), so a sink on another backend never
+		has to know how wui spells things. This is `WinUISink`'s door aliasing,
+		facing the other way — and it rewrites in place, which is fine: the
+		tree was built by `describe` a moment ago and belongs to nobody else.
+	**/
+	public static function describeCanonical(view:wui.View):Node {
+		return canonize(describe(view));
+	}
+
+	static function canonize(node:Node):Node {
+		switch (node.type) {
+			case "Button":
+				var t = node.props.get("text");
+				if (t != null && !node.props.exists("label")) {
+					node.props.set("label", t);
+					node.props.remove("text");
+				}
+			case "ToggleSwitch":
+				node.type = "Toggle";
+			case "TextBox":
+				node.type = "TextInput";
+			case _:
+		}
+		for (child in node.children) canonize(child);
+		return node;
+	}
 }

@@ -126,7 +126,37 @@ class WinUISink implements NodeSink<Int> {
 		first adopter had no such freedom.
 	**/
 	public function create(node:Node, parent:Null<Int>):Int {
-		return nativeCreate(node.type, parent == null ? -1 : parent);
+		return nativeCreate(canonType(node.type), parent == null ? -1 : parent);
+	}
+
+	/**
+		The register's canonical vocabulary, translated at the door.
+
+		A tree that arrives over the Companion wire speaks the canonical
+		names — `Button`/`label`, `Toggle`/`isOn`, `TextInput`/`text` (see
+		`cui.nui.Describe`, the reference) — while this sink's native runtime
+		is generated from wui's own control declarations, where the same
+		things are called `text`, `ToggleSwitch` and `TextBox`. Without the
+		translation the native setter has no case for `label` and drops it
+		silently: a wired Button renders 24 pixels wide with nothing on it.
+
+		wui-native trees (the menu bar, anything out of `FromViews`) pass
+		through unchanged: the aliases only name types and keys that do not
+		exist in wui's own schema.
+	**/
+	static function canonType(t:String):String {
+		return switch (t) {
+			case "Toggle": "ToggleSwitch";
+			case "TextInput": "TextBox";
+			case _: t;
+		}
+	}
+
+	static function canonKey(type:String, key:String):String {
+		return switch [type, key] {
+			case ["Button", "label"]: "text";
+			case _: key;
+		}
 	}
 
 	/**
@@ -138,6 +168,8 @@ class WinUISink implements NodeSink<Int> {
 		the effect re-reads it.
 	**/
 	public function applyProp(target:Int, type:String, key:String, value:PropValue):Void {
+		key = canonKey(type, key);
+		type = canonType(type);
 		remember(target, _bind(function() {
 			var resolved = PropValueTools.resolve(value);
 			if (resolved == null) return;
@@ -210,6 +242,7 @@ class WinUISink implements NodeSink<Int> {
 	/** Apply the ordered chain. Order is significant, so it is not sorted. **/
 	public function applyModifiers(target:Int, type:String, modifiers:Array<Modifier>):Void {
 		if (modifiers == null) return;
+		type = canonType(type);
 
 		for (m in modifiers) {
 			var f0 = (m.floats != null && m.floats.length > 0) ? m.floats[0] : 0.0;
