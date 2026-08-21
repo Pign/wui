@@ -9,6 +9,16 @@ package wui.mui;
 	`#if (mui_backend == "wui")` branch it used to live in.
 **/
 @:nui
+// The roles this backend can honour, stated where a macro can read them.
+//
+// `mui.macros.Surfaces` refuses a declaration whose role is missing from this
+// list, naming this backend — degradation the application accepts on purpose
+// (`@:surface(Role, optional)`) rather than degradation it never hears about.
+// Widen this the day a host lands, never to quiet a build.
+//
+// Auxiliary is the extra windows, Commands the MenuBar injected as ordinary
+// nodes; Companion rides the describer installed below.
+@:hostedRoles(Auxiliary, Commands, Companion)
 @:autoBuild(mui.macros.Surfaces.build())
 class App extends wui.App {
     var _appTitle:String = "App";
