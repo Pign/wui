@@ -16,6 +16,10 @@ package wui.mui;
 // (`@:surface(Role, optional)`) rather than degradation it never hears about.
 // Widen this the day a host lands, never to quiet a build.
 //
+// Companion is a statement of capability, not of appetite: it says this
+// backend installs a describer and *could* serve one. The networked corner
+// stays off until the build asks for it with -D mui_cafos.
+//
 // Auxiliary is the extra windows, Commands the MenuBar injected as ordinary
 // nodes; Companion rides the describer installed below.
 @:hostedRoles(Auxiliary, Commands, Companion)
