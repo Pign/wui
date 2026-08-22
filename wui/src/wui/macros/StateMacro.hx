@@ -22,16 +22,19 @@ class StateMacro {
     #if macro
     public static function build():Array<Field> {
         var fields = Context.getBuildFields();
-        var stateFields:Array<{name:String, type:ComplexType, initialValue:Expr}> = [];
+        var stateFields:Array<{name:String, type:ComplexType, initialValue:Expr, pos:Position,
+            durable:Null<rui.macros.DurableState.DurableRequest>}> = [];
 
         // Find and transform @:state fields
         var newFields:Array<Field> = [];
         for (field in fields) {
             var hasStateMeta = false;
+            var stateMeta:Null<MetadataEntry> = null;
             if (field.meta != null) {
                 for (meta in field.meta) {
                     if (meta.name == ":state" || meta.name == "state") {
                         hasStateMeta = true;
+                        stateMeta = meta;
                         break;
                     }
                 }
@@ -43,11 +46,19 @@ class StateMacro {
                         var initialValue = e != null ? e : macro null;
                         var fieldName = field.name;
 
+                        // `@:state(durable)`: born from the device store rather
+                        // than from the default. See rui.macros.DurableState.
+                        var durable = rui.macros.DurableState.requestOf(field, stateMeta, t);
+                        if (durable != null)
+                            initialValue = rui.macros.DurableState.hydrate(durable, initialValue);
+
                         // Record for constructor injection
                         stateFields.push({
                             name: fieldName,
                             type: t,
-                            initialValue: initialValue
+                            initialValue: initialValue,
+                            pos: field.pos,
+                            durable: durable
                         });
 
                         // Transform field type to State<T>
@@ -89,6 +100,8 @@ class StateMacro {
                             for (sf in stateFields) {
                                 var nameStr = sf.name;
                                 initExprs.push(macro $i{nameStr} = new wui.state.State($e{sf.initialValue}, $v{nameStr}));
+                                if (sf.durable != null)
+                                    initExprs.push(rui.macros.DurableState.bindCall(sf.durable, macro this, nameStr, sf.pos));
                             }
 
                             // Get existing body expressions
@@ -115,6 +128,8 @@ class StateMacro {
                 for (sf in stateFields) {
                     var nameStr = sf.name;
                     initExprs.push(macro $i{nameStr} = new wui.state.State($e{sf.initialValue}, $v{nameStr}));
+                    if (sf.durable != null)
+                        initExprs.push(rui.macros.DurableState.bindCall(sf.durable, macro this, nameStr, sf.pos));
                 }
                 initExprs.push(macro super());
 

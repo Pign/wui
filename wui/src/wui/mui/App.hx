@@ -29,6 +29,16 @@ class App extends wui.App {
 
     public function new() {
         super();
+        // The durable store, before anything durable exists. This runs inside
+        // `super()` from the application's point of view, so its
+        // `@:state(durable)` cells are constructed after the store is there and
+        // are born from it rather than corrected afterwards.
+        //
+        // A macro: it expands to nothing where this platform has no store
+        // implementation, so a build that asked for no durable cell does not
+        // fail for a capability it never used. An application that *does* ask is
+        // refused at the field, by name.
+        mui.state.Durable.install();
         // The bridge is wui core and may not import mui, so the mui layer
         // installs the hook that turns Auxiliary declarations into extra
         // windows. Every mui app sets the same static — idempotent by
