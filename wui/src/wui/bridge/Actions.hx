@@ -27,10 +27,22 @@ import wui.state.StateAction;
 **/
 @:keep
 class Actions {
-	/** Run one action. Unknown shapes report rather than fail quietly. **/
+	/**
+		Run one action. Unknown shapes report rather than fail quietly.
+
+		**Inside a coalescing scope.** `Sequence` is the reason it is worth
+		saying: three writes in one gesture used to re-run each effect reading
+		them three times, and on this backend an effect is a property or a
+		list, so that was three trips across the bridge to the UI thread for
+		two pictures nobody sees. The scope nests, so a `Sequence` calling
+		back into `run` adds to the same queue rather than flushing early.
+	**/
 	public static function run(action:StateAction):Void {
 		if (action == null) return;
+		rui.Signal.Scheduler.batch(() -> dispatch(action));
+	}
 
+	static function dispatch(action:StateAction):Void {
 		switch (action) {
 			case Increment(state, amount):
 				var st:Dynamic = state;
