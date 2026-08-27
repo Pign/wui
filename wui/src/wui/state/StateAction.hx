@@ -4,8 +4,14 @@ package wui.state;
  * Declarative state mutations. Used with Button and other interactive controls
  * to describe what should happen when the user interacts with a control.
  *
- * The UIBuilder macro translates these into C++/WinRT code that directly
- * calls State<T>::set() — no serialization, no bridge.
+ * `wui.bridge.Actions` **interprets** these at runtime. The generator used to
+ * translate them into C++ instead, which worked for four of the constructors
+ * below and silently dropped the rest — `Custom` included, the one that exists
+ * to carry arbitrary code. W4 removed that ceiling rather than raising it.
+ *
+ * One consequence worth knowing: a whole action is one gesture, run inside
+ * `rui.Signal.Scheduler.batch`, so a `Sequence` of three writes re-runs each
+ * effect reading them once instead of three times.
  *
  * Usage:
  *   new Button("Add", null, count.inc(1))
