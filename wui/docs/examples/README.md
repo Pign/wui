@@ -126,19 +126,19 @@ class Counter extends wui.App {
 
 - `@:state var count:Int = 0` -- declares a reactive state variable. The `StateMacro` transforms this into a `State<Int>` initialized in the constructor.
 - State-driven buttons -- each button triggers a `StateAction` (increment, decrement, or reset).
-- Reactive text -- the "0" text would be bound to `count.value` so it updates when the state changes.
+- Reactive text -- the "0" text would be bound to `count` so it updates when the state changes.
 - The same layout patterns as hello-world: VStack, HStack, Spacer, centered alignment.
 
 ### How state flows in this example
 
 ```
 User clicks "Increment"
-  -> StateAction.Increment(count, 1) fires
-  -> count.value becomes 1
-  -> count's subscriber lambda fires
+  -> StateAction.Increment(count_, 1) fires
+  -> count becomes 1
+  -> count_'s subscriber lambda fires
   -> Lambda calls textBlock.Text(L"1") in C++
   -> UI shows "1" instantly
-```
+'```
 
 ### Build and run
 

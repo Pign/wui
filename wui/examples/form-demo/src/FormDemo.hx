@@ -20,8 +20,8 @@ class FormDemo extends wui.App {
 
         return new VStack([
             heading,
-            new TextBox("Enter your name...", name),
-            new Text("Hello, " + name)
+            new TextBox("Enter your name...", name_),
+            new Text("Hello, " + name_)
         ]);
     }
 }

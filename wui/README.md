@@ -18,8 +18,8 @@ class Counter extends wui.App {
         display.font = "TitleLarge";
         display.padding = 12;
 
-        var minus = new Button("-", null, count.dec(1));
-        var plus = new Button("+", null, count.inc(1));
+        var minus = new Button("-", null, count_.dec(1));
+        var plus = new Button("+", null, count_.inc(1));
 
         return new VStack([display, new HStack([minus, plus])]);
     }

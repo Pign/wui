@@ -69,12 +69,12 @@ class TodoApp extends wui.App {
 		heading.font = "TitleLarge";
 		heading.padding = 12;
 
-		var field = new TextBox("New item...", newItemText);
+		var field = new TextBox("New item...", newItemText_);
 
 		// The closure the transpiler could never carry.
 		var add = new Button("Add");
 		add.onClick = function() {
-			var title = newItemText.value;
+			var title = newItemText;
 			if (title == "") return;
 
 			// `push` returns a NEW list -- the point of the structure. With an
@@ -82,15 +82,15 @@ class TodoApp extends wui.App {
 			// explaining why, and nothing stopped the next reader writing
 			// `push` and losing the notification. Now the obvious call is the
 			// correct one.
-			todos.value = todos.value.push(new TodoItem(title, false));
-			newItemText.value = "";
-			trace('[todo] ajouté : $title (${todos.value.length} au total)');
+			todos = todos.push(new TodoItem(title, false));
+			newItemText = "";
+			trace('[todo] ajouté : $title (${todos.length} au total)');
 		};
 
 		var entry = new HStack([field, add], 8);
 		entry.padding = 12;
 
-		var list = new ListView(todos, function(item:Dynamic) {
+		var list = new ListView(todos_, function(item:Dynamic) {
 			var todo:TodoItem = cast item;
 			var mark = todo.completed ? "[x] " : "[ ] ";
 			var caption = new Text(mark + todo.title);
@@ -101,7 +101,7 @@ class TodoApp extends wui.App {
 				// and `set` would see no change. Rebuilding it makes the write
 				// visible -- and an immutable *item* would not need this either,
 				// which is the next step the rule points at.
-				todos.value = todos.value.map(function(t) return t);
+				todos = todos.map(function(t) return t);
 				trace('[todo] ${todo.title} -> ${todo.completed}');
 			};
 			return new HStack([caption, toggle], 8);

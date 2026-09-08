@@ -24,14 +24,14 @@ class Counter extends wui.App {
         title.font = "Title";
         title.padding = 12;
 
-        var display = new Text("Count: " + count);
+        var display = new Text("Count: " + count_);
         display.font = "TitleLarge";
         display.foregroundColor = "accent";
         display.padding = 12;
 
         var minus = new Button("-", null, count.dec(1));
         minus.padding = 12;
-        var reset = new Button("Reset", null, count.setTo(0));
+        var reset = new Button("Reset", null, count = 0);
         reset.padding = 12;
         var plus = new Button("+", null, count.inc(1));
         plus.padding = 12;
@@ -46,21 +46,21 @@ class Counter extends wui.App {
         c.onClick = () -> report("C");
         c.padding = 12;
 
-        var field = new TextBox("Tapez ici...", label);
+        var field = new TextBox("Tapez ici...", label_);
         field.padding = 12;
-        var echo = new Text("Texte Haxe : " + label);
+        var echo = new Text("Texte Haxe : " + label_);
         echo.padding = 12;
 
         var writer = new Button("Haxe écrit le texte");
         writer.onClick = () -> {
-            label.value = "écrit depuis Haxe (" + count.value + ")";
-            trace('[wui] label = ${label.value}');
+            label = "écrit depuis Haxe (" + count + ")";
+            trace('[wui] label = $label');
         };
         writer.padding = 12;
 
         var custom = new Button("Custom ×2", null, Custom(() -> {
-            count.value = count.value * 2;
-            trace('[wui] Custom : count = ${count.value}');
+            count = count * 2;
+            trace('[wui] Custom : count = $count');
         }));
         custom.padding = 12;
 

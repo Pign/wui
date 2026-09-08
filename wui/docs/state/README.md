@@ -29,12 +29,12 @@ The core reactive container. Holds a value and notifies subscribers when it chan
 var count = new State<Int>(0, "count");
 
 // Read
-trace(count.value);    // 0
-trace(count.get());    // 0  (alias)
+trace(count);    // 0
+trace(count);    // 0  (alias)
 
 // Write (notifies all subscribers)
-count.value = 5;
-count.set(10);         // alias for count.value = 10
+count = 5;
+count = 10;         // alias for count.value = 10
 
 // Subscribe to changes
 count.subscribe((newValue) -> trace("count is now: " + newValue));
@@ -91,21 +91,24 @@ class MyApp extends wui.App {
 }
 ```
 
-This compiles to:
+This compiles to a cell and a property per field:
 
 ```haxe
-var count:State<Int>;   // initialized in constructor as new State<Int>(0, "count")
-var name:State<String>; // initialized as new State<String>("World", "name")
-var isDark:State<Bool>; // initialized as new State<Bool>(false, "isDark")
+public var count_:State<Int>;    // the cell: new State<Int>(0, "count") in the constructor
+var count(get, set):Int;         // the property: get_count() is count_.get(), set_count(v) is count_.set(v)
+// and the same for name_ / name, isDark_ / isDark
 ```
 
 The macro:
 
-1. Changes the field type from `T` to `State<T>`.
-2. Injects `new State<T>(initialValue, "fieldName")` into the constructor.
-3. Creates a constructor if one does not exist.
+1. Keeps the field's name and type as a property that forwards to the cell.
+2. Adds the cell under the name with a trailing underscore, `count_`.
+3. Injects `new State<T>(initialValue, "fieldName")` into the constructor,
+   creating one if none exists.
 
-You then use `count.value`, `count.inc(1)`, etc. in your `body()`.
+You then read `count` and write `count = 5` in your `body()` and closures; a
+control that binds, or a `StateAction`, takes the cell: `count_.inc(1)`. The
+split is `rui.macros.StateProperty`, shared by every backend.
 
 ---
 
@@ -114,24 +117,24 @@ You then use `count.value`, `count.inc(1)`, etc. in your `body()`.
 Declarative state mutations. Passed to `Button` and other interactive controls to describe what happens on interaction. The UIBuilder macro translates these directly into C++/WinRT code.
 
 ```haxe
-new Button("Add", null, count.inc(1))
-new Button("Reset", null, count.setTo(0))
-new Button("Toggle Dark", null, isDark.tog())
+new Button("Add", null, count_.inc(1))
+new Button("Reset", null, count_.setTo(0))
+new Button("Toggle Dark", null, isDark_.tog())
 ```
 
 ### All actions
 
 | Action | Description | Example |
 |--------|-------------|---------|
-| `Increment(state, amount)` | Add `amount` to a numeric state. | `count.inc(1)` |
-| `Decrement(state, amount)` | Subtract `amount` from a numeric state. | `count.dec(1)` |
-| `SetValue(state, value)` | Set state to a specific value. | `count.setTo(0)` |
-| `Toggle(state)` | Flip a boolean state. | `isDark.tog()` |
+| `Increment(state, amount)` | Add `amount` to a numeric state. | `count_.inc(1)` |
+| `Decrement(state, amount)` | Subtract `amount` from a numeric state. | `count_.dec(1)` |
+| `SetValue(state, value)` | Set state to a specific value. | `count_.setTo(0)` |
+| `Toggle(state)` | Flip a boolean state. | `isDark_.tog()` |
 | `Append(state, value)` | Append a value to an array state. | `items.appendAction(newItem)` |
 | `Remove(state, value)` | Remove a value from an array state. | `Remove(items, item)` |
 | `Custom(callback)` | Execute an arbitrary callback. | `Custom(() -> doWork())` |
-| `Animated(action, curve)` | Wrap an action with animation. | `Animated(count.inc(1), EaseOut)` |
-| `Sequence(actions)` | Execute multiple actions in order. | `Sequence([count.inc(1), msg.setTo("Done")])` |
+| `Animated(action, curve)` | Wrap an action with animation. | `Animated(count_.inc(1), EaseOut)` |
+| `Sequence(actions)` | Execute multiple actions in order. | `Sequence([count_.inc(1), msg.setTo("Done")])` |
 
 ### AnimationCurve
 
@@ -180,8 +183,8 @@ For computed or filtered bindings:
 
 ```haxe
 var binding = new Binding<String>(
-    () -> name.value.toUpperCase(),
-    (v) -> name.value = v.toLowerCase()
+    () -> name.toUpperCase(),
+    (v) -> name = v.toLowerCase()
 );
 ```
 
@@ -273,9 +276,9 @@ class Counter extends wui.App {
                 .font(TitleLarge)
                 .foregroundColor(AccentColor),
             new HStack([
-                new Button("Decrement", null, count.dec(1)),
-                new Button("Reset", null, count.setTo(0)),
-                new Button("Increment", null, count.inc(1))
+                new Button("Decrement", null, count_.dec(1)),
+                new Button("Reset", null, count_.setTo(0)),
+                new Button("Increment", null, count_.inc(1))
             ]).spacing(8)
         ]).horizontalAlignment(Center);
     }

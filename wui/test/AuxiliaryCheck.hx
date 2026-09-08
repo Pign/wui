@@ -105,18 +105,18 @@ class AuxApp extends mui.App {
 
 	// The cells stay private after the @:state rewrite; the test writes
 	// through these, the way any outside caller would.
-	public function bumpA() countA.set(countA.get() + 1);
-	public function bumpB() countB.set(countB.get() + 1);
+	public function bumpA() countA += 1;
+	public function bumpB() countB += 1;
 
 	@:surface(Auxiliary)
 	function inspector():mui.View {
 		Probe.builtA++;
-		return new mui.ui.Text('A ${countA.get()}');
+		return new mui.ui.Text('A $countA');
 	}
 
 	@:surface(Auxiliary)
 	function metrics():mui.View {
 		Probe.builtB++;
-		return new mui.ui.Text('B ${countB.get()}');
+		return new mui.ui.Text('B $countB');
 	}
 }

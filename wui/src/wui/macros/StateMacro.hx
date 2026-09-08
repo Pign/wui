@@ -68,14 +68,10 @@ class StateMacro {
                             params: t != null ? [TPType(t)] : []
                         });
 
-                        newFields.push({
-                            name: field.name,
-                            doc: field.doc,
-                            access: field.access,
-                            pos: field.pos,
-                            meta: field.meta,
-                            kind: FVar(stateType, null)
-                        });
+                        // The field becomes a property over a cell named `count_` -- see
+                        // rui.macros.StateProperty.
+                        for (f in rui.macros.StateProperty.split(field, t, stateType))
+                            newFields.push(f);
 
                     default:
                         Context.error("@:state can only be applied to var fields", field.pos);
@@ -99,9 +95,10 @@ class StateMacro {
                             var initExprs:Array<Expr> = [];
                             for (sf in stateFields) {
                                 var nameStr = sf.name;
-                                initExprs.push(macro $i{nameStr} = new wui.state.State($e{sf.initialValue}, $v{nameStr}));
+                                var cell = rui.macros.StateProperty.cellName(nameStr);
+                                initExprs.push(macro $i{cell} = new wui.state.State($e{sf.initialValue}, $v{nameStr}));
                                 if (sf.durable != null)
-                                    initExprs.push(rui.macros.DurableState.bindCall(sf.durable, macro this, nameStr, sf.pos));
+                                    initExprs.push(rui.macros.DurableState.bindCall(sf.durable, macro this, cell, sf.pos));
                             }
 
                             // Get existing body expressions
@@ -127,9 +124,10 @@ class StateMacro {
                 var initExprs:Array<Expr> = [];
                 for (sf in stateFields) {
                     var nameStr = sf.name;
-                    initExprs.push(macro $i{nameStr} = new wui.state.State($e{sf.initialValue}, $v{nameStr}));
+                    var cell = rui.macros.StateProperty.cellName(nameStr);
+                    initExprs.push(macro $i{cell} = new wui.state.State($e{sf.initialValue}, $v{nameStr}));
                     if (sf.durable != null)
-                        initExprs.push(rui.macros.DurableState.bindCall(sf.durable, macro this, nameStr, sf.pos));
+                        initExprs.push(rui.macros.DurableState.bindCall(sf.durable, macro this, cell, sf.pos));
                 }
                 initExprs.push(macro super());
 

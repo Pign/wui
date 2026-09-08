@@ -130,7 +130,7 @@ class MenuApp extends mui.App {
 
 	/** The test's way to write what a label reads. **/
 	public function bump() {
-		items.set(items.get() + 1);
+		items += 1;
 	}
 
 	override function body():mui.View {
@@ -140,9 +140,9 @@ class MenuApp extends mui.App {
 	@:surface(Commands)
 	function file():Array<mui.surface.Command> {
 		return [
-			new mui.surface.Command("Items: " + items.get(), function() {
+			new mui.surface.Command("Items: " + items, function() {
 				Probe.cleared++;
-				items.set(items.get() + 1);
+				items += 1;
 			}).key("ctrl+k"),
 			new mui.surface.Command("No chord", function() {}),
 		];
