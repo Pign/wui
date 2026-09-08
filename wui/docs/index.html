@@ -6,7 +6,7 @@
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="description" content="Write native WinUI 3 Windows apps in Haxe">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
-  <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css">
+  <link rel="stylesheet" href="vendor/vue.css">
   <style>
     :root {
       --theme-color: #0078d4;
@@ -26,6 +26,7 @@
   <div id="app"></div>
   <script>
     window.$docsify = {
+      noEmoji: true,
       name: 'wui',
       repo: 'https://github.com/lapavoiserie/wui',
       loadSidebar: true,
@@ -59,7 +60,7 @@
       }
     }
   </script>
-  <script src="//cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script src="vendor/mermaid.min.js"></script>
   <script>
     mermaid.initialize({ startOnLoad: false, theme: 'default' });
     // Re-render mermaid diagrams after docsify page load
@@ -71,20 +72,21 @@
       mermaid.run({ querySelector: '.mermaid' });
     }
   </script>
-  <script src="//cdn.jsdelivr.net/npm/docsify@4"></script>
+  <script src="vendor/docsify.min.js"></script>
   <script>
     // Re-render mermaid diagrams on each docsify page change
     window.$docsify.plugins = (window.$docsify.plugins || []).concat(function(hook) {
       hook.doneEach(function() { renderMermaid(); });
     });
   </script>
-  <script src="//cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
-  <script src="//cdn.jsdelivr.net/npm/docsify-copy-code@2"></script>
-  <script src="//cdn.jsdelivr.net/npm/docsify-pagination@2/dist/docsify-pagination.min.js"></script>
-  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-haxe.min.js"></script>
-  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
-  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-cpp.min.js"></script>
-  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
-  <script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-xml-doc.min.js"></script>
+  <script src="vendor/search.min.js"></script>
+  <script src="vendor/docsify-copy-code.min.js"></script>
+  <script src="vendor/docsify-pagination.min.js"></script>
+  <script src="vendor/prism-haxe.min.js"></script>
+  <script src="vendor/prism-bash.min.js"></script>
+  <script src="vendor/prism-c.min.js"></script>
+  <script src="vendor/prism-cpp.min.js"></script>
+  <script src="vendor/prism-json.min.js"></script>
+  <script src="vendor/prism-xml-doc.min.js"></script>
 </body>
 </html>
