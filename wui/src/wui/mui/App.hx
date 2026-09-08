@@ -24,6 +24,7 @@ package wui.mui;
 // nodes; Companion rides the describer installed below.
 @:hostedRoles(Auxiliary, Commands, Companion)
 @:autoBuild(mui.macros.Surfaces.build())
+@:autoBuild(mui.macros.Intents.build())
 class App extends wui.App {
     var _appTitle:String = "App";
 
@@ -68,6 +69,11 @@ class App extends wui.App {
     /** What `@:surface` declared. `mui.macros.Surfaces` overrides this on the
         application; the default is the empty answer. **/
     public function declaredSurfaces():Array<mui.surface.SurfaceDecl> return [];
+
+    /** What `@:intent` declared. `mui.macros.Intents` overrides this on the
+        application; the default is the empty answer. `dui.state.Share.join`
+        hands it to the registry, so a call arriving by name can run. **/
+    public function declaredIntents():Array<rui.state.Shared.IntentDecl> return [];
 
     /**
         The declared Auxiliary windows, as node thunks. Cardinality Many —
